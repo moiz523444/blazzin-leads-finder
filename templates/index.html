@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omni-Lead AI — Agency Autonomous Client Acquisition Engine</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+    <!-- Background Glow Blobs -->
+    <div class="blob-bg blob-1"></div>
+    <div class="blob-bg blob-2"></div>
+
+    <div class="app-layout">
+        <!-- Top Navigation -->
+        <header class="top-nav">
+            <div class="brand">
+                <div class="brand-icon">
+                    <i data-lucide="zap"></i>
+                </div>
+                <div>
+                    <h1>Omni-Lead <span class="badge-ai">AI Engine</span></h1>
+                    <p class="brand-sub">Autonomous High-Intent Client Acquisition for Software Agencies</p>
+                </div>
+            </div>
+
+            <div class="nav-actions">
+                <div class="live-indicator">
+                    <span class="pulse-dot"></span>
+                    <span>System Operational</span>
+                </div>
+                <button id="exportCsvBtn" class="btn btn-secondary">
+                    <i data-lucide="download"></i>
+                    <span>Export CSV</span>
+                </button>
+                <button id="clearAllBtn" class="btn btn-danger-ghost" title="Clear Leads Database">
+                    <i data-lucide="trash-2"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Stats Overview Cards -->
+        <section class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon icon-cyan">
+                    <i data-lucide="database"></i>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-label">Total Leads Extracted</span>
+                    <h3 id="statTotal" class="stat-val">{{ stats.total_leads }}</h3>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon icon-emerald">
+                    <i data-lucide="flame"></i>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-label">High-Intent (Active Budget)</span>
+                    <h3 id="statHighIntent" class="stat-val">{{ stats.high_intent_leads }}</h3>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon icon-amber">
+                    <i data-lucide="globe-x"></i>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-label">Zero Website (Goldmine)</span>
+                    <h3 id="statNoWebsite" class="stat-val">{{ stats.no_website_leads }}</h3>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon icon-purple">
+                    <i data-lucide="send"></i>
+                </div>
+                <div class="stat-info">
+                    <span class="stat-label">Contacted Clients</span>
+                    <h3 id="statContacted" class="stat-val">{{ stats.contacted_leads }}</h3>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <!-- Left Panel: Harvest & Lead Criteria Controller -->
+            <aside class="control-panel glass-panel">
+                <div class="panel-header">
+                    <i data-lucide="sliders"></i>
+                    <h2>Harvester Configuration</h2>
+                </div>
+
+                <form id="scanForm" class="control-form">
+                    <!-- Source Selection -->
+                    <div class="form-group">
+                        <label class="section-label">High-Intent Channels</label>
+                        <div class="source-toggles">
+                            <label class="toggle-card">
+                                <input type="checkbox" name="source" value="new_business" checked>
+                                <span class="toggle-custom">
+                                    <i data-lucide="sparkles"></i>
+                                    <div>
+                                        <strong>Zero-Website Businesses (Hot Leads 🔥)</strong>
+                                        <small>Active businesses with Phone/WhatsApp but NO website</small>
+                                    </div>
+                                </span>
+                            </label>
+
+                            <label class="toggle-card">
+                                <input type="checkbox" name="source" value="meta_ads" checked>
+                                <span class="toggle-custom">
+                                    <i data-lucide="gauge"></i>
+                                    <div>
+                                        <strong>Website Speed & Tech Revamps ⚡</strong>
+                                        <small>Slow, broken, or outdated sites with verified contacts</small>
+                                    </div>
+                                </span>
+                            </label>
+
+                            <label class="toggle-card">
+                                <input type="checkbox" name="source" value="job_intent" checked>
+                                <span class="toggle-custom">
+                                    <i data-lucide="shopping-bag"></i>
+                                    <div>
+                                        <strong>E-Commerce Conversion Revamps 🛍️</strong>
+                                        <small>Online stores with checkout issues & direct contacts</small>
+                                    </div>
+                                </span>
+                            </label>
+
+                            <label class="toggle-card">
+                                <input type="checkbox" name="source" value="app_store" checked>
+                                <span class="toggle-custom">
+                                    <i data-lucide="smartphone"></i>
+                                    <div>
+                                        <strong>Mobile App Overhauls 📱</strong>
+                                        <small>Low-rated apps with verified developer site & contacts</small>
+                                    </div>
+                                </span>
+                            </label>
+
+                            <label class="toggle-card">
+                                <input type="checkbox" name="source" value="social_media" checked>
+                                <span class="toggle-custom">
+                                    <i data-lucide="share-2"></i>
+                                    <div>
+                                        <strong>Social & Founder Intel 🌐</strong>
+                                        <small>LinkedIn, Instagram, Facebook, X & Reddit leads</small>
+                                    </div>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Target Niche -->
+                    <div class="form-group">
+                        <label for="nicheInput" class="section-label">Target Industry / Niche</label>
+                        <input type="text" id="nicheInput" list="nicheList" class="form-input"
+                            value="All Industries / Multi-Niche" placeholder="Type any niche or pick from list...">
+                        <datalist id="nicheList">
+                            <option value="All Industries / Multi-Niche">
+                            <option value="Healthcare & Dental Clinics">
+                            <option value="Real Estate & Luxury Properties">
+                            <option value="E-Commerce & DTC Brands">
+                            <option value="Aesthetic & Plastic Surgery Clinics">
+                            <option value="Luxury Car Rentals & Chauffeur">
+                            <option value="Fitness & Wellness Centers">
+                            <option value="Logistics & Freight Services">
+                            <option value="Law & Legal Advisory">
+                            <option value="B2B SaaS & Tech Startups">
+                            <option value="Fine Dining & Hospitality">
+                        </datalist>
+                    </div>
+
+                    <!-- Target Country -->
+                    <div class="form-group">
+                        <label for="countryInput" class="section-label">Target Geography (5 Tier-1 Markets)</label>
+                        <select id="countryInput" class="form-select">
+                            <option value="ALL" selected>🌐 All 5 Countries (US, UK, CA, UAE, QA)</option>
+                            <option value="US">🇺🇸 United States (US)</option>
+                            <option value="UK">🇬🇧 United Kingdom (UK)</option>
+                            <option value="CA">🇨🇦 Canada (CA)</option>
+                            <option value="UAE">🇦🇪 United Arab Emirates / Dubai (UAE)</option>
+                            <option value="QA">🇶🇦 Qatar / Doha (QA)</option>
+                        </select>
+                    </div>
+
+                    <!-- Batch Lead Volume -->
+                    <div class="form-group">
+                        <div class="slider-header">
+                            <label class="section-label">Batch Lead Volume</label>
+                            <span id="volumeValue" class="badge-value">40 Leads</span>
+                        </div>
+                        <input type="range" id="volumeSlider" min="10" max="200" step="10" value="40"
+                            class="range-slider">
+                        <div class="slider-ticks">
+                            <span>10</span>
+                            <span>50</span>
+                            <span>100</span>
+                            <span>200</span>
+                        </div>
+                    </div>
+
+                    <!-- Optional Gemini API Key -->
+                    <div class="form-group">
+                        <label for="apiKeyInput" class="section-label">
+                            <span>Gemini API Key</span>
+                            <small class="text-muted">(Optional for Ultra-AI)</small>
+                        </label>
+                        <input type="password" id="apiKeyInput"
+                            placeholder="AIzaSy... (leave blank to use built-in model)" class="form-input">
+                    </div>
+
+                    <button type="submit" id="startScanBtn" class="btn btn-primary btn-block">
+                        <i data-lucide="crosshair"></i>
+                        <span>Launch Autonomous Scan</span>
+                    </button>
+                </form>
+
+                <!-- Live Status Terminal -->
+                <div id="liveTerminal" class="terminal-box">
+                    <div class="terminal-header">
+                        <span class="term-dot red"></span>
+                        <span class="term-dot yellow"></span>
+                        <span class="term-dot green"></span>
+                        <span class="term-title">Engine Console</span>
+                    </div>
+                    <div id="terminalLogs" class="terminal-logs">
+                        <div class="log-line text-muted">[System Ready] Select channels and click Launch Scan.</div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Right Panel: Leads Stream, Filter & Outreach Cards -->
+            <section class="leads-panel glass-panel">
+                <div class="leads-header">
+                    <div class="search-box">
+                        <i data-lucide="search"></i>
+                        <input type="text" id="searchInput" placeholder="Search by company, website, or pain point...">
+                    </div>
+
+                    <div class="filter-group">
+                        <select id="filterSource" class="filter-select">
+                            <option value="all">All Channels</option>
+                            <option value="social_media">Social & Founders (LinkedIn/IG/FB/X/Reddit) 🌐</option>
+                            <option value="new_business">Zero-Website (Hot Leads 🔥)</option>
+                            <option value="meta_ads">Website Tech Revamp ⚡</option>
+                            <option value="job_intent">E-Commerce Revamp 🛍️</option>
+                            <option value="app_store">Mobile App Overhaul 📱</option>
+                        </select>
+
+                        <select id="filterCountry" class="filter-select">
+                            <option value="all">All Countries</option>
+                            <option value="US">🇺🇸 United States</option>
+                            <option value="UK">🇬🇧 United Kingdom</option>
+                            <option value="CA">🇨🇦 Canada</option>
+                            <option value="UAE">🇦🇪 UAE / Dubai</option>
+                            <option value="QA">🇶🇦 Qatar / Doha</option>
+                        </select>
+
+                        <select id="filterService" class="filter-select">
+                            <option value="all">All Services</option>
+                            <option value="web_development">Web Development</option>
+                            <option value="mobile_apps">Mobile Apps</option>
+                            <option value="ecommerce">E-Commerce</option>
+                            <option value="seo">SEO Optimization</option>
+                            <option value="social_media">Social Media</option>
+                        </select>
+
+                        <select id="filterStatus" class="filter-select">
+                            <option value="all">All Status</option>
+                            <option value="new">New</option>
+                            <option value="contacted">Contacted</option>
+                            <option value="replied">Meeting Booked</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Leads Container -->
+                <div id="leadsList" class="leads-list">
+                    <!-- Populated via JavaScript dynamically -->
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Pitch & Outreach Modal -->
+    <div id="pitchModal" class="modal-overlay">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <div>
+                    <span id="modalSourceBadge" class="source-tag">Source</span>
+                    <h3 id="modalBusinessName">Business Name</h3>
+                </div>
+                <button id="closeModalBtn" class="btn-close">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <div class="audit-summary-box">
+                    <div class="summary-top">
+                        <span class="label">Identified Pain Points:</span>
+                        <span id="modalAuditScore" class="score-badge">Score: 35/100</span>
+                    </div>
+                    <ul id="modalPainPoints" class="pain-point-list"></ul>
+                </div>
+
+                <div class="pitch-box">
+                    <div class="pitch-header">
+                        <label class="section-label">AI Personalized Outreach Pitch (Ready to Send)</label>
+                        <button id="copyPitchBtn" class="btn-copy">
+                            <i data-lucide="copy"></i>
+                            <span>Copy Text</span>
+                        </button>
+                    </div>
+                    <textarea id="modalPitchText" class="pitch-textarea" rows="8" readonly></textarea>
+                </div>
+
+                <div class="direct-outreach-actions">
+                    <a id="modalEmailBtn" href="#" class="btn btn-outline">
+                        <i data-lucide="mail"></i>
+                        <span>Open in Email</span>
+                    </a>
+                    <a id="modalWhatsAppBtn" href="#" target="_blank" class="btn btn-whatsapp">
+                        <i data-lucide="message-circle"></i>
+                        <span>Direct WhatsApp Pitch</span>
+                    </a>
+                    <button id="markContactedBtn" class="btn btn-primary">
+                        <i data-lucide="check"></i>
+                        <span>Mark as Contacted</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+
+</html>
