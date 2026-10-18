@@ -27,17 +27,19 @@ async def harvest_ecom_stores(niche: str = "ecommerce", country: str = "US", lim
     country_key = (country or "US").upper()
     phrase, _ = normalize_niche(niche)
 
-    target_countries = ["UAE", "US", "UK", "CA", "QA"] if country_key == "ALL" else [country_key]
+    target_countries = ["US", "UK", "CA", "UAE", "QA"] if country_key == "ALL" else [country_key]
     leads = []
     seen_domains = set()
     raw_targets = []
 
+    import random
     for ck in target_countries:
         c_name, cities = COUNTRY_ECOM.get(ck, (country, [country]))
+        city = random.choice(cities)
         queries = [
-            f'"{phrase}" online store {cities[0]} {c_name}',
-            f'"{phrase}" shop now {c_name} contact',
-            f'"{phrase}" powered by shopify {cities[0]}',
+            f'{phrase} online store {city} {c_name} phone',
+            f'{phrase} brand shop {city} contact',
+            f'{phrase} powered by shopify {city}',
         ]
         for q in queries:
             if len(raw_targets) >= limit * 2:
@@ -119,47 +121,5 @@ async def harvest_ecom_stores(niche: str = "ecommerce", country: str = "US", lim
             leads.append(r)
             if len(leads) >= limit:
                 break
-
-    # If live search is throttled or empty, supplement from verified real e-commerce stores
-    if len(leads) < limit:
-        ECOM_CATALOG = [
-            ("The Luxury Closet Dubai", "https://theluxurycloset.com", "+971 4 457 7400", "971556015096", "info@theluxurycloset.com", "Dubai, UAE", "Luxury Fashion DTC"),
-            ("Mumzworld Middle East", "https://www.mumzworld.com", "+971 4 433 9455", "971501712433", "support@mumzworld.com", "Dubai, UAE", "Family E-Commerce"),
-            ("Wild Cosmetics UK", "https://www.wearewild.com", "+44 20 8064 1250", "", "hello@wearewild.com", "London, UK", "DTC Eco Brand"),
-            ("Gym+Coffee Athleisure", "https://gympluscoffee.com", "+44 20 3808 9700", "", "hello@gympluscoffee.com", "London, UK", "Apparel E-Commerce"),
-            ("Ridge Wallet USA", "https://ridge.com", "+1 800 880 7434", "", "support@ridge.com", "California, US", "Consumer Goods DTC"),
-            ("Chubbies Shorts DTC", "https://www.chubbiesshorts.com", "+1 844 274 2779", "", "info@chubbiesshorts.com", "Austin, US", "Lifestyle Store"),
-            ("Endy Sleep Canada", "https://www.endy.com", "+1 844 656 3639", "", "hello@endy.com", "Toronto, CA", "Mattress DTC Store"),
-            ("Q-Tickets Online Store Qatar", "https://www.q-tickets.com", "+974 4406 9090", "97433887000", "info@q-tickets.com", "Doha, QA", "Event & Goods Commerce"),
-        ]
-        for name, url, ph, wa, em, loc, niche_label in ECOM_CATALOG:
-            if len(leads) >= limit:
-                break
-            ck_match = loc.split(", ")[-1]
-            if country_key != "ALL" and ck_match != country_key:
-                continue
-
-            leads.append(Lead(
-                business_name=name,
-                source="job_intent",
-                service_needed="ecommerce",
-                website=url,
-                has_website=True,
-                location=loc,
-                email=em,
-                phone=ph,
-                whatsapp=wa,
-                pain_points=[
-                    "High mobile checkout bounce rate — cart abandonment issue",
-                    "Sub-optimal Core Web Vitals on mobile storefront",
-                    "Missing 1-click WhatsApp checkout widget for Middle East/UK buyers"
-                ],
-                intent_level="High",
-                budget_estimate="$3,500 - $8,500",
-                audit_score=48,
-                audit_summary=f"Active {niche_label} online storefront with direct contact details. High ROI opportunity for checkout and speed revamp.",
-                ai_pitch=f"Hi {name} Team,\n\nI was analyzing your online storefront ({url}) and noticed key drop-off points in your mobile checkout funnel. We specialize in Shopify & headless e-commerce speed optimization and checkout conversion rate lifts (+20-35% typical). Would you be open to a 3-minute video breakdown of our findings?",
-                status="new"
-            ))
 
     return leads

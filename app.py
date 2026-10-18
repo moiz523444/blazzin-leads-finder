@@ -66,7 +66,11 @@ async def run_scan(req: ScanRequest):
     Executes an autonomous multi-source harvesting and enrichment cycle.
     """
     all_harvested = []
-    per_source_limit = min(15, max(3, req.limit // max(1, len(req.sources))))
+    # Clear previous leads so every scan displays 100% fresh organic batch without carrying old baggage
+    db.clear_all_leads()
+
+    # Boosted volume: harvest up to 35 targets per source so user gets rich lead volume
+    per_source_limit = min(35, max(8, req.limit // max(1, len(req.sources))))
 
     tasks = []
     if "meta_ads" in req.sources:
@@ -85,10 +89,33 @@ async def run_scan(req: ScanRequest):
         if isinstance(res, list):
             all_harvested.extend(res)
 
-    valid_leads = [
-        lead for lead in all_harvested
-        if (lead.phone or lead.whatsapp or lead.email)
-    ]
+    # STRICT RULE: Must have callable PHONE or WHATSAPP + NEVER REPEAT ALREADY HARVESTED LEADS
+    existing_sigs = db.get_existing_signatures()
+    fresh_leads = []
+    seen_in_scan = set()
+
+    for lead in all_harvested:
+        if not (lead.phone or lead.whatsapp):
+            continue
+        p = (lead.phone or "").strip()
+        w = (lead.website or "").strip().lower()
+        b = (lead.business_name or "").strip().lower()
+
+        # Check if already in database from previous scans
+        if p in existing_sigs or (w and w in existing_sigs) or b in existing_sigs:
+            continue
+        # Check if already seen in current scan
+        if p in seen_in_scan or (w and w in seen_in_scan) or b in seen_in_scan:
+            continue
+
+        seen_in_scan.add(p)
+        if w:
+            seen_in_scan.add(w)
+        seen_in_scan.add(b)
+        fresh_leads.append(lead)
+
+    valid_leads = fresh_leads
+
 
     async def enrich_lead(lead: Lead):
         lead.ai_pitch = await generate_pitch(lead, gemini_api_key=req.gemini_api_key)

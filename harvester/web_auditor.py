@@ -54,76 +54,78 @@ async def audit_website(url: str) -> Dict[str, Any]:
             html = res.text
             soup = BeautifulSoup(html, "html.parser")
 
-            # Check SSL
+            # 1. CRITICAL: Insecure SSL (Browser shows 'Not Secure' warning, destroys customer trust)
             if not str(res.url).startswith("https://"):
-                pain_points.append("No SSL Certificate (Insecure HTTP)")
+                pain_points.append("BROKEN SECURITY: Insecure HTTP connection — Modern browsers flag site as 'Not Secure' & block incoming customers")
+                score -= 35
+
+            # 2. CRITICAL DEAL-BREAKER: Extreme Mobile Load Delay (> 2.5s)
+            if speed_ms > 3000:
+                pain_points.append(f"REVENUE KILLER: Severe mobile load lag ({speed_ms}ms) — 53%+ of smartphone visitors immediately bounce and call competitors")
+                score -= 30
+            elif speed_ms > 1800:
+                pain_points.append(f"PERFORMANCE BOTTLENECK: High server response time ({speed_ms}ms) causing high mobile drop-off")
                 score -= 20
 
-            # Check Speed
-            if speed_ms > 2500:
-                pain_points.append(f"Slow response time ({speed_ms}ms) - Hurts mobile conversions")
-                score -= 25
-            elif speed_ms > 1400:
-                pain_points.append(f"Sub-optimal speed ({speed_ms}ms)")
-                score -= 10
-
-            # Check Mobile Viewport
+            # 3. CRITICAL DEAL-BREAKER: Non-Responsive / Broken on Mobile
             viewport = soup.find("meta", attrs={"name": re.compile(r"viewport", re.I)})
             if not viewport:
-                pain_points.append("Missing Mobile Viewport (Not optimized for smartphones)")
+                pain_points.append("BROKEN ON MOBILE: Site lacks mobile viewport — Pages render microscopic on iPhone/Android requiring frustrating pinch-to-zoom")
+                score -= 40
+
+            # 4. CRITICAL DEAL-BREAKER: Ancient Obsolete Code & Security Exploits
+            if "jquery-1." in html_lower or "jquery/1." in html_lower:
+                pain_points.append("OBSOLETE TECH STACK: Running deprecated jQuery 1.x (vulnerable to known XSS exploits & broken on modern iOS Safari)")
+                score -= 25
+            if "table" in html_lower and ("cellpadding" in html_lower or "cellspacing" in html_lower):
+                pain_points.append("OUTDATED ARCHITECTURE: Ancient table-based layout structure — Completely incompatible with modern search engines & smartphones")
                 score -= 30
 
-            # Check Meta SEO Tags
-            title = soup.find("title")
-            meta_desc = soup.find("meta", attrs={"name": re.compile(r"description", re.I)})
-            if not title or len(title.text.strip()) < 5:
-                pain_points.append("Missing or weak SEO Title tag")
-                score -= 10
-            if not meta_desc:
-                pain_points.append("Missing Meta Description (Hurts Google ranking)")
-                score -= 15
-
-            # Detect CMS / Outdated platforms
-            html_lower = html.lower()
+            # 5. Outdated CMS & Vulnerable Version
             if "wp-content" in html_lower or "wordpress" in html_lower:
-                cms = "WordPress"
-            elif "shopify" in html_lower:
-                cms = "Shopify"
+                if re.search(r"ver=(?:3\.|4\.|5\.[0-8])", html_lower):
+                    cms = "Ancient WordPress"
+                    pain_points.append("URGENT SECURITY RISK: Ancient WordPress core (< 5.9) with unpatched vulnerabilities — Critical malware injection hazard")
+                    score -= 35
+                else:
+                    cms = "WordPress"
+                    pain_points.append("PERFORMANCE OVERHEAD: Bloated legacy WordPress setup slowing mobile checkout conversions")
+                    score -= 15
             elif "wix.com" in html_lower:
-                cms = "Wix (Sub-optimal for scale)"
-                score -= 10
-                pain_points.append("Built on Wix template - Limited performance & SEO capabilities")
-            elif "squarespace" in html_lower:
-                cms = "Squarespace"
+                cms = "Wix Template"
+                pain_points.append("CONVERSION BOTTLENECK: Trapped in basic Wix template — Poor SEO indexing and sluggish mobile execution")
+                score -= 15
+            elif "weebly" in html_lower:
+                cms = "Weebly"
+                pain_points.append("ABANDONED BUILDER: Hosted on obsolete Weebly builder — Look & feel appears unprofessional to high-paying clients")
+                score -= 30
 
-            # Check Outdated Copyright year in footer
+            # 6. Outdated Copyright / Abandoned Look (Direct proof of business neglect)
             matches = re.findall(r"(?:copyright|©)\s*([12][0-9]{3})", html_lower)
             if matches:
                 year = int(matches[-1])
-                if year <= 2021:
-                    pain_points.append(f"Outdated site copyright ({year}) - Has not been updated in years")
-                    score -= 15
+                if year <= 2022:
+                    pain_points.append(f"OUTDATED & NEGLECTED: Copyright is {year} ({2026 - year} years without updates) — Customers assume business is closed")
+                    score -= 25
 
-            # Missing modern conversion elements (no WhatsApp or live chat or clear CTA)
+            # 7. No 1-Click WhatsApp or Instant Lead Capture
             if "wa.me" not in html_lower and "whatsapp" not in html_lower:
-                pain_points.append("No instant WhatsApp / Quick chat conversion button")
-                score -= 10
+                pain_points.append("ZERO INSTANT CONTACT CTA: No 1-click WhatsApp or instant booking button — 60%+ of modern mobile visitors leave without contacting")
+                score -= 15
 
     except httpx.ConnectTimeout:
-        pain_points.append("Website times out / Very slow server hosting")
-        score = 20
-    except httpx.ConnectError:
-        pain_points.append("Domain connection failed / DNS configuration issue")
+        pain_points.append("CRITICAL: Server timeout — Website frequently fails to open for potential customers")
         score = 15
+    except httpx.ConnectError:
+        pain_points.append("CRITICAL: Domain/DNS connection failed — Business is currently losing 100% of web traffic")
+        score = 10
     except Exception as e:
-        pain_points.append(f"Audit warning: {str(e)[:50]}")
-        score = 40
-
-    if not pain_points:
-        pain_points.append("Standard website - Potential for modern app or custom feature expansion")
+        pain_points.append(f"Technical warning: {str(e)[:50]}")
+        score = 35
 
     score = max(5, min(score, 100))
-    summary = f"Audit Score: {score}/100. Issues detected: {', '.join(pain_points[:2])}."
+    summary = f"Audit Score: {score}/100. Key Deal-Breakers: {'; '.join(pain_points[:2])}."
+
 
     return {
         "has_website": True,

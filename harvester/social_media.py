@@ -3,7 +3,7 @@ import urllib.parse
 from typing import List, Dict, Any
 
 from models import Lead
-from enricher.contact_extractor import clean_whatsapp_number, is_valid_email
+from enricher.contact_extractor import clean_whatsapp_number, is_valid_email, format_phone_international
 from enricher.lead_quality import ddg_search, normalize_niche
 
 COUNTRY_GEO = {
@@ -28,19 +28,17 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
     phrase, _ = normalize_niche(niche)
     target_term = phrase if phrase != "local business" else "business"
 
+    import random
+    cities_pool = ["New York", "London", "Toronto", "Dubai", "Los Angeles", "Chicago", "Miami", "Manchester", "Vancouver"]
+    sample_cities = random.sample(cities_pool, 3)
+
     queries = [
-        # Reddit Client Requests (Real people with budget looking for developers/agencies)
-        (f'site:reddit.com/r/forhire OR site:reddit.com/r/freelance_forhire "[Hiring]" "{target_term}" OR "website" OR "developer" OR "software"', "Reddit", "reddit"),
-        (f'site:reddit.com/r/webdev OR site:reddit.com/r/ecommerce "need a developer" OR "looking for agency" OR "custom software"', "Reddit", "reddit"),
-        # X / Twitter Direct Client Project Inquiries
-        (f'site:x.com OR site:twitter.com ("looking for a web developer" OR "need a custom website" OR "looking for software agency" OR "need an app built") "{target_term}"', "X / Twitter", "twitter"),
-        # LinkedIn Founders & Decision Makers actively seeking agency help
-        (f'site:linkedin.com/in/ ("looking for web developer" OR "need a software developer" OR "seeking dev agency" OR "looking for frontend developer") "{c_name}"', "LinkedIn", "linkedin"),
-        # Facebook Commercial Business Pages needing custom systems
-        (f'site:facebook.com "{target_term}" "{main_city}" ("whatsapp" OR "call" OR "email")', "Facebook", "facebook"),
-        # Instagram Business Accounts needing web/funnels
-        (f'site:instagram.com "{target_term}" "{main_city}" ("whatsapp" OR "email" OR "contact")', "Instagram", "instagram"),
+        (f'facebook {target_term} {sample_cities[0]} call', "Facebook", "facebook"),
+        (f'facebook {target_term} {sample_cities[1]} phone', "Facebook", "facebook"),
+        (f'facebook {target_term} {sample_cities[2]} whatsapp', "Facebook", "facebook"),
+        (f'reddit hiring {target_term} developer', "Reddit", "reddit"),
     ]
+    random.shuffle(queries)
 
     leads = []
     seen = set()
@@ -55,31 +53,37 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
             title = r.get("title", "")
             snippet = r.get("snippet", "")
             url = r.get("url", "")
-            combined = f"{title} {snippet} {url}"
-
-            # Extract phone or WhatsApp
+            # Extract phone or WhatsApp (ONLY from title and snippet, NEVER from URL digits)
+            text_without_url = f"{title} {snippet}"
             phone = ""
-            ph_match = PHONE_REGEX.search(combined)
-            if ph_match:
-                digits = re.sub(r'\D', '', ph_match.group(1))
-                if 8 <= len(digits) <= 15:
-                    phone = ph_match.group(1).strip()
-
-            # Extract Email
-            email = ""
-            em_match = EMAIL_REGEX.search(combined)
-            if em_match and is_valid_email(em_match.group(0)):
-                email = em_match.group(0).lower()
-
             whatsapp = ""
-            if "wa.me/" in combined or "whatsapp" in combined.lower():
-                wa_m = re.search(r'(?:wa\.me/|whatsapp[^\d]*)([0-9+]{8,16})', combined, re.I)
+            email = ""
+
+            em_match = EMAIL_REGEX.search(text_without_url)
+            if em_match:
+                candidate_email = em_match.group(0).lower().strip()
+                if is_valid_email(candidate_email):
+                    email = candidate_email
+
+            # Extract phone using multi-pattern parser
+            from harvester.zero_website import extract_phone_from_text
+            extracted_ph = extract_phone_from_text(text_without_url, default_prefix=def_prefix)
+            if extracted_ph:
+                fmt_p, wa_d = format_phone_international(extracted_ph, default_country=country_up)
+                if fmt_p:
+                    phone = fmt_p
+                    whatsapp = wa_d
+
+            # Extract direct WhatsApp link if present in snippet
+            if "wa.me/" in text_without_url or "whatsapp" in text_without_url.lower():
+                wa_m = re.search(r'(?:wa\.me/|whatsapp[^\d]*)([0-9+]{8,16})', text_without_url, re.I)
                 if wa_m:
-                    whatsapp = clean_whatsapp_number(wa_m.group(1))
-            if not whatsapp and phone:
-                cl_ph = clean_whatsapp_number(phone)
-                if 9 <= len(cl_ph) <= 15:
-                    whatsapp = cl_ph
+                    fmt_w, wa_d = format_phone_international(wa_m.group(1), default_country=country_up)
+                    if wa_d:
+                        whatsapp = wa_d
+                        if not phone and fmt_w:
+                            phone = fmt_w
+
 
             # Clean name
             b_name = re.sub(r' \| .*| - .*|: .*| on LinkedIn.*| on Instagram.*| on Facebook.*| / X$', '', title).strip()

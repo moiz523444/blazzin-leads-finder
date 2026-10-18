@@ -6,7 +6,7 @@ import threading
 from typing import List, Dict, Any, Optional
 from models import Lead
 
-# Pure In-Memory SQLite Database (0 Bytes on Disk - No folder growth!)
+# Pure In-Memory Ephemeral RAM Database (0 Bytes on Disk - Fresh scan every time!)
 _lock = threading.Lock()
 _conn = sqlite3.connect(":memory:", check_same_thread=False)
 _conn.row_factory = sqlite3.Row
@@ -41,6 +41,22 @@ def init_db():
         )
         """)
         _conn.commit()
+
+def get_existing_signatures() -> set:
+    """Returns set of all existing phone numbers, websites, and business names to prevent duplicates across scans."""
+    with _lock:
+        cursor = _conn.cursor()
+        cursor.execute("SELECT business_name, phone, website FROM leads")
+        rows = cursor.fetchall()
+        sigs = set()
+        for r in rows:
+            if r["phone"]:
+                sigs.add(r["phone"].strip())
+            if r["website"]:
+                sigs.add(r["website"].strip().lower())
+            if r["business_name"]:
+                sigs.add(r["business_name"].strip().lower())
+        return sigs
 
 def save_lead(lead: Lead) -> Optional[int]:
     """Saves lead into RAM with deduplication."""

@@ -94,18 +94,20 @@ Best regards,
 Mobile Engineering Team"""
 
     else:
-        # PITCH FOR WEBSITE REVAMP & SPEED OPTIMIZATION
-        pitch = f"""Hi {b_name} Team,
+        # HIGH-CONVERTING PITCH FOR WEBSITE TECH REVAMP
+        pitch = f"""Hi {b_name} Leadership Team,
 
-I came across your website and ran a performance and mobile usability audit on it.
+I visited your website and ran a technical performance and mobile security diagnostic on it.
 
-One key issue stood out: {primary_pain}. Issues like this quietly cost you customer inquiries, especially from mobile visitors who expect instant responsiveness.
+A severe issue immediately showed up: {primary_pain}.
 
-We build ultra-fast, modern websites and custom web apps (Next.js / Tailwind / modern stack) that load in under 1 second and turn more visitors into paying clients.
+When potential clients visit your site from their phones and experience this, over 50% immediately bounce and hire your direct competitors instead. For an active business in {lead.location}, this is quietly costing you tens of thousands of dollars in lost bookings every month.
 
-Mind if I send over a free 2-minute video audit with actionable fixes for your site?
+We engineer high-converting Next.js / modern web systems with sub-second mobile speeds, bank-grade SSL, and automated 1-click WhatsApp booking systems.
 
-Cheers,
-Web Architecture & Performance Lead"""
+I've put together a quick 90-second video teardown showing the exact fixes you need. Mind if I send the link over to you here?
+
+Best regards,
+Agency Technical Director"""
 
     return pitch.strip()

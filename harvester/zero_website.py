@@ -4,18 +4,18 @@ from typing import List, Dict, Any
 
 from models import Lead
 from enricher.contact_extractor import (
-    EMAIL_REGEX, is_valid_email, is_valid_phone, clean_whatsapp_number
+    EMAIL_REGEX, is_valid_email, is_valid_phone, clean_whatsapp_number, format_phone_international
 )
 from enricher.lead_quality import (
-    ddg_search, normalize_niche, name_from_domain, GENERIC_TITLE
+    ddg_search, normalize_niche, name_from_domain, GENERIC_TITLE, ALL_INDUSTRIES_POOL
 )
 
 COUNTRY_PHONE_PREFIXES = {
     "UAE": ("+971", ["Dubai", "Abu Dhabi", "Sharjah"]),
     "QA": ("+974", ["Doha", "Lusail", "Al Rayyan"]),
-    "US": ("+1", ["New York", "Miami", "Los Angeles", "Austin"]),
-    "UK": ("+44", ["London", "Manchester", "Birmingham"]),
-    "CA": ("+1", ["Toronto", "Vancouver", "Montreal"]),
+    "US": ("+1", ["New York", "Los Angeles", "Chicago", "Houston", "Miami", "Dallas", "Austin", "Atlanta", "Phoenix", "San Diego"]),
+    "UK": ("+44", ["London", "Manchester", "Birmingham", "Leeds", "Glasgow"]),
+    "CA": ("+1", ["Toronto Ontario", "Vancouver BC", "Montreal Quebec", "Calgary Alberta"]),
 }
 
 PHONE_PATTERNS = [
@@ -24,7 +24,9 @@ PHONE_PATTERNS = [
     re.compile(r'(\+44[\s\-]?[0-9]{2,4}[\s\-]?[0-9]{3,4}[\s\-]?[0-9]{3,4})'),
     re.compile(r'(\+1[\s\-]?[0-9]{3}[\s\-]?[0-9]{3}[\s\-]?[0-9]{4})'),
     re.compile(r'(\(?\d{3}\)?[\s\.-]\d{3}[\s\.-]\d{4})'),
-    re.compile(r'(?:whatsapp|call|phone|tel)[\s:]*([+\d\s\(\)-]{8,18})', re.I),
+    re.compile(r'(?:whatsapp|call|phone|tel|contact)[\s:]*([+\d\s\(\)-]{8,20})', re.I),
+    re.compile(r'(\b0[1-9][0-9\s-]{7,12}\b)'),
+    re.compile(r'(\+[1-9][0-9\s-]{8,16})'),
 ]
 
 
@@ -66,22 +68,43 @@ async def harvest_zero_website_leads(niche: str = "dental", country: str = "UAE"
     country_key = (country or "ALL").upper()
     phrase, _ = normalize_niche(niche)
 
-    target_countries = ["UAE", "US", "UK", "CA", "QA"] if country_key == "ALL" else [country_key]
+    target_countries = ["US", "UK", "CA", "UAE", "QA"] if country_key == "ALL" else [country_key]
     leads = []
     seen_contacts = set()
 
+    import random
     queries = []
+    shuffled_industries = list(ALL_INDUSTRIES_POOL if phrase == "local business" else [phrase])
+    random.shuffle(shuffled_industries)
+
     if country_key == "ALL":
-        # Ultra-fast parallel discovery: 1 top query per country
-        for ck in target_countries:
+        for idx, ck in enumerate(target_countries):
             prefix, cities = COUNTRY_PHONE_PREFIXES.get(ck, ("+1", ["New York"]))
-            c_term = phrase if phrase != "local business" else "clinic OR real estate OR store"
-            queries.append((ck, prefix, cities[0], f'"{c_term}" {cities[0]} whatsapp OR phone'))
+            selected_cities = random.sample(cities, min(2, len(cities)))
+            for city in selected_cities:
+                selected_ind = random.choice(shuffled_industries)
+                if ck in ("US", "CA"):
+                    queries.append((ck, prefix, city, f'facebook {selected_ind} {city} call'))
+                    queries.append((ck, prefix, city, f'{selected_ind} {city} phone contact'))
+                else:
+                    queries.append((ck, prefix, city, f'facebook {selected_ind} {city} {prefix}'))
+                    queries.append((ck, prefix, city, f'{selected_ind} {city} {prefix} whatsapp'))
     else:
         prefix, cities = COUNTRY_PHONE_PREFIXES.get(country_key, ("+1", ["New York"]))
-        c_term = phrase if phrase != "local business" else "business"
-        queries.append((country_key, prefix, cities[0], f'"{c_term}" {cities[0]} whatsapp'))
-        queries.append((country_key, prefix, cities[0], f'"{c_term}" {cities[0]} contact phone'))
+        selected_cities = random.sample(cities, min(3, len(cities)))
+        for city in selected_cities:
+            selected_ind = random.choice(shuffled_industries)
+            if country_key in ("US", "CA"):
+                queries.append((country_key, prefix, city, f'facebook {selected_ind} {city} call'))
+                queries.append((country_key, prefix, city, f'{selected_ind} {city} phone contact'))
+            else:
+                queries.append((country_key, prefix, city, f'facebook {selected_ind} {city} {prefix}'))
+                queries.append((country_key, prefix, city, f'{selected_ind} {city} {prefix} whatsapp'))
+
+    random.shuffle(queries)
+
+
+
 
     for ck, prefix, city, q in queries:
         if len(leads) >= limit:
@@ -99,31 +122,32 @@ async def harvest_zero_website_leads(niche: str = "dental", country: str = "UAE"
             phone = extract_phone_from_text(combined_text, default_prefix=prefix)
             email = extract_email_from_text(combined_text)
             
-            # Check WhatsApp
-            whatsapp = ""
-            wa_match = re.search(r'(?:wa\.me/|whatsapp[^\d]*)([0-9+]{8,16})', combined_text, re.I)
-            if wa_match:
-                clean_wa = clean_whatsapp_number(wa_match.group(1))
-                if 8 <= len(clean_wa) <= 15:
-                    whatsapp = clean_wa
-            elif phone:
-                clean_p = clean_whatsapp_number(phone)
-                if 9 <= len(clean_p) <= 15:
-                    whatsapp = clean_p
+            # Validate and format phone with official phonenumbers parser
+            formatted_phone, wa_digits = format_phone_international(phone, default_country=ck)
+            if not formatted_phone:
+                continue  # Discard if phone number is invalid or cannot be verified!
 
-            # MANDATORY: Must have at least phone, whatsapp or email!
-            if not (phone or whatsapp or email):
-                continue
+            phone = formatted_phone
+            whatsapp = wa_digits
+
 
             contact_key = f"{phone}:{email}:{whatsapp}"
             if contact_key in seen_contacts:
                 continue
             seen_contacts.add(contact_key)
 
-            # Clean business name
+            # Discard support articles, faq pages or generic titles
+            title_lower = title.lower()
+            if any(bad in title_lower for bad in ["how to contact", "whatsapp support", "faq", "terms of service", "privacy policy", "help center", "customer care"]):
+                continue
+
+            # Clean business name (strip phone numbers, instagram handles, and suffixes)
             b_name = re.sub(r' - .*| \| .*|: .*| official .*| Home$| Homepage$| Facebook$| Instagram$', '', title, flags=re.I).strip()
+            b_name = re.sub(r'(\+?[0-9\s-]{7,20})', '', b_name).strip()
+            b_name = re.sub(r'\(@[a-zA-Z0-9_.]+\)', '', b_name).strip()
+            b_name = re.sub(r'(?i)\b(i am hiring|contact us|contact|whatsapp|call)\b', '', b_name).strip(" -:|,")
             if not b_name or len(b_name) < 3 or GENERIC_TITLE.search(b_name):
-                b_name = f"{phrase.title()} Center {city}"
+                b_name = f"{selected_ind.title()} ({city})"
 
             lead = Lead(
                 business_name=b_name[:60],

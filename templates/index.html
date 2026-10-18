@@ -235,6 +235,12 @@
                         <span class="term-dot yellow"></span>
                         <span class="term-dot green"></span>
                         <span class="term-title">Engine Console</span>
+                        <span id="scanTimerBadge" style="margin-left:auto; font-size:11px; color:var(--cyan); display:none; font-family:monospace;">
+                            ⏳ <span id="timeRemaining">--s remaining</span>
+                        </span>
+                    </div>
+                    <div id="scanProgressBar" style="display:none; height:3px; width:100%; background:rgba(255,255,255,0.08); overflow:hidden;">
+                        <div id="progressBarFill" style="height:100%; width:0%; background:linear-gradient(90deg, var(--cyan), var(--purple)); transition:width 0.4s ease;"></div>
                     </div>
                     <div id="terminalLogs" class="terminal-logs">
                         <div class="log-line text-muted">[System Ready] Select channels and click Launch Scan.</div>
@@ -344,7 +350,7 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=2.1"></script>
 </body>
 
 </html>

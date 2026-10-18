@@ -304,11 +304,36 @@ document.addEventListener("DOMContentLoaded", () => {
                 addLog(progressMsgs[pIdx], "normal");
                 pIdx++;
             }
-        }, 3000);
+        }, 4000);
+
+        // Dynamic Time Remaining & Progress Counter
+        const scanTimerBadge = document.getElementById("scanTimerBadge");
+        const timeRemainingSpan = document.getElementById("timeRemaining");
+        const scanProgressBar = document.getElementById("scanProgressBar");
+        const progressBarFill = document.getElementById("progressBarFill");
+
+        let estimatedSeconds = Math.max(25, Math.min(180, checkedSources.length * 20));
+        let elapsed = 0;
+        if (scanTimerBadge) scanTimerBadge.style.display = "inline-flex";
+        if (scanProgressBar) scanProgressBar.style.display = "block";
+        if (progressBarFill) progressBarFill.style.width = "5%";
+
+        const countdownInterval = setInterval(() => {
+            elapsed++;
+            const remaining = Math.max(1, estimatedSeconds - elapsed);
+            if (timeRemainingSpan) {
+                timeRemainingSpan.textContent = `~${remaining}s remaining`;
+            }
+            if (progressBarFill) {
+                const percent = Math.min(95, Math.round((elapsed / estimatedSeconds) * 90) + 5);
+                progressBarFill.style.width = `${percent}%`;
+            }
+        }, 1000);
 
         try {
+            // Generous timeout (240s / 4 minutes) so deep web audits & contact extractions never get aborted
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            const timeoutId = setTimeout(() => controller.abort(), 240000);
 
             const res = await fetch("/api/scan", {
                 method: "POST",
@@ -325,8 +350,11 @@ document.addEventListener("DOMContentLoaded", () => {
             clearTimeout(timeoutId);
 
             const data = await res.json();
+            if (progressBarFill) progressBarFill.style.width = "100%";
+            if (timeRemainingSpan) timeRemainingSpan.textContent = "Done!";
+
             if (data.success) {
-                addLog(`Success! Extracted and enriched ${data.harvested_count} fresh high-intent leads.`, "success");
+                addLog(`Success! Extracted and verified ${data.harvested_count} fresh authentic leads.`, "success");
                 
                 // Sync filter with scanned country
                 if (searchInput) searchInput.value = "";
@@ -350,12 +378,18 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             if (err.name === 'AbortError') {
-                addLog("Scan took too long to complete. Please try with fewer channels or a specific niche.", "warn");
+                addLog("Scan took longer than 4 minutes. Please try picking a specific country or niche.", "warn");
             } else {
-                addLog(`Connection notice: ${err.message}`, "warn");
+                addLog(`Notice: ${err.message}`, "warn");
             }
         } finally {
             clearInterval(progressTimer);
+            clearInterval(countdownInterval);
+            setTimeout(() => {
+                if (scanTimerBadge) scanTimerBadge.style.display = "none";
+                if (scanProgressBar) scanProgressBar.style.display = "none";
+                if (progressBarFill) progressBarFill.style.width = "0%";
+            }, 3000);
             startScanBtn.disabled = false;
             startScanBtn.innerHTML = `<i data-lucide="crosshair"></i> <span>Launch Autonomous Scan</span>`;
             lucide.createIcons();

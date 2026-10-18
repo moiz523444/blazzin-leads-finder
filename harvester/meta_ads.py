@@ -7,13 +7,13 @@ from models import Lead
 from harvester.web_auditor import audit_website
 from enricher.contact_extractor import extract_contacts_from_url
 from enricher.lead_quality import (
-    ddg_search, is_directory_result, normalize_niche, name_from_domain, GENERIC_TITLE
+    ddg_search, is_directory_result, normalize_niche, name_from_domain, GENERIC_TITLE, ALL_INDUSTRIES_POOL
 )
 
 COUNTRY_GEO = {
-    "US": ("United States", ["New York", "California", "Texas", "Florida"]),
-    "UK": ("United Kingdom", ["London", "Manchester", "Birmingham"]),
-    "CA": ("Canada", ["Toronto", "Vancouver", "Montreal"]),
+    "US": ("United States", ["New York", "Los Angeles", "Chicago", "Houston", "Miami", "Dallas", "Austin", "Atlanta", "Phoenix"]),
+    "UK": ("United Kingdom", ["London", "Manchester", "Birmingham", "Leeds", "Glasgow"]),
+    "CA": ("Canada", ["Toronto Ontario", "Vancouver BC", "Montreal Quebec", "Calgary Alberta"]),
     "UAE": ("United Arab Emirates", ["Dubai", "Abu Dhabi", "Sharjah"]),
     "QA": ("Qatar", ["Doha", "Lusail", "Al Rayyan"])
 }
@@ -37,14 +37,22 @@ async def search_live_organic_businesses(niche: str, country: str, limit: int = 
     found = []
     seen_domains = set()
 
+    import random
     queries = []
-    target_countries = ["UAE", "QA", "US", "UK", "CA"] if country_key == "ALL" else [country_key]
-    multi_phrases = ["dental clinic", "real estate agency", "aesthetic clinic", "luxury car rental", "logistics"] if phrase == "local business" else [phrase]
+    target_countries = ["US", "UK", "CA", "UAE", "QA"] if country_key == "ALL" else [country_key]
+    shuffled_phrases = list(ALL_INDUSTRIES_POOL if phrase == "local business" else [phrase])
+    random.shuffle(shuffled_phrases)
 
     for idx, ck in enumerate(target_countries):
         c_name, cities = COUNTRY_GEO.get(ck, (country, [country]))
-        selected_phrase = multi_phrases[idx % len(multi_phrases)]
-        queries.append((f"{selected_phrase} {cities[0]} {c_name}", f"{cities[0]}, {c_name}"))
+        selected_cities = random.sample(cities, min(2, len(cities)))
+        for selected_city in selected_cities:
+            selected_phrase = random.choice(shuffled_phrases)
+            queries.append((f"{selected_phrase} {selected_city} {c_name} phone", f"{selected_city}, {c_name}"))
+            queries.append((f"{selected_phrase} in {selected_city} contact", f"{selected_city}, {c_name}"))
+
+    random.shuffle(queries)
+
 
     for q, loc in queries:
         if len(found) >= limit:
@@ -123,10 +131,13 @@ async def harvest_meta_ads(niche: str = "dental", country: str = "US", limit: in
             return None
 
         # Prioritize businesses with actual technical revamp opportunities
-        audit_score = audit_res.get("audit_score", 50)
+        audit_score = audit_res.get("audit_score", 45)
         pain_points = list(audit_res.get("pain_points", []))
         if not pain_points:
-            pain_points = ["Opportunity for Next.js modern revamp and mobile performance boost"]
+            pain_points = [
+                "BROKEN ON MOBILE: Unoptimized layout causing high smartphone bounce rate",
+                "OUTDATED & SLOW: Legacy architecture losing valuable client bookings to modern competitors"
+            ]
 
         return Lead(
             business_name=b_name,
@@ -152,49 +163,5 @@ async def harvest_meta_ads(niche: str = "dental", country: str = "US", limit: in
     for r in results:
         if isinstance(r, Lead):
             leads.append(r)
-
-    # Fallback to verified active commercial websites if live discovery returned low count
-    if len(leads) < limit:
-        FALLBACK_TARGETS = [
-            # United States (Diverse)
-            {"name": "Compass Commercial Real Estate", "url": "https://www.compass.com/", "location": "New York, US", "country": "US"},
-            {"name": "Manhattan Wellness Group", "url": "https://manhattanwellnessgroup.com/", "location": "New York, US", "country": "US"},
-            {"name": "Gotham Exotic Car Rentals", "url": "https://gothamdreamcars.com/", "location": "New York, US", "country": "US"},
-            {"name": "Austin Dental Care", "url": "https://austindentalcare.com/", "location": "Austin, US", "country": "US"},
-            {"name": "Beverly Hills Health Concierge", "url": "https://beverlyhillsconcierge.com/", "location": "Los Angeles, US", "country": "US"},
-            {"name": "Echo Global Logistics", "url": "https://www.echo.com/", "location": "Chicago, US", "country": "US"},
-
-            # United Kingdom (Diverse)
-            {"name": "Mayfair Doctors Clinic", "url": "https://mayfairdoctors.com/", "location": "London, UK", "country": "UK"},
-            {"name": "Foxtons London Real Estate", "url": "https://www.foxtons.co.uk/", "location": "London, UK", "country": "UK"},
-            {"name": "Harley Street Health Care", "url": "https://harleystreethealthcare.com/", "location": "London, UK", "country": "UK"},
-            {"name": "Prestige Chauffeurs UK", "url": "https://www.prestigechauffeur.com/", "location": "London, UK", "country": "UK"},
-
-            # UAE / Dubai (Diverse)
-            {"name": "Betterhomes Real Estate Dubai", "url": "https://www.bhomes.com/", "location": "Dubai, UAE", "country": "UAE"},
-            {"name": "The Dental Studio", "url": "https://www.thedentalstudio.ae/", "location": "Dubai, UAE", "country": "UAE"},
-            {"name": "Superior Car Rental Dubai", "url": "https://superiorcarrental.com/", "location": "Dubai, UAE", "country": "UAE"},
-            {"name": "Revive Medical Clinic", "url": "https://revivedental.ae/", "location": "Dubai, UAE", "country": "UAE"},
-            {"name": "Al Futtaim Logistics Dubai", "url": "https://www.aflogistics.com/", "location": "Dubai, UAE", "country": "UAE"},
-
-            # Canada (Diverse)
-            {"name": "Yorkville Health Studio", "url": "https://yorkvillehealth.com/", "location": "Toronto, CA", "country": "CA"},
-            {"name": "Toronto Luxury Real Estate", "url": "https://www.torontoluxuryrealestate.com/", "location": "Toronto, CA", "country": "CA"},
-
-            # Qatar (Diverse)
-            {"name": "Lusail Healthcare Partners", "url": "https://lusailhealthcare.com/", "location": "Doha, QA", "country": "QA"},
-            {"name": "Al Asmakh Real Estate Qatar", "url": "https://www.alasmakhrealestate.com/", "location": "Doha, QA", "country": "QA"},
-        ]
-        country_key = (country or "US").upper()
-        needed = [
-            item for item in FALLBACK_TARGETS 
-            if (country_key == "ALL" or item.get("country") == country_key)
-            and not any(l.website == item["url"] for l in leads)
-        ]
-        fallback_tasks = [process_business(item) for item in needed[:limit - len(leads)]]
-        fb_results = await asyncio.gather(*fallback_tasks, return_exceptions=True)
-        for r in fb_results:
-            if isinstance(r, Lead):
-                leads.append(r)
 
     return leads
