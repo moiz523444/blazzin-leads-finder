@@ -124,40 +124,36 @@ _search_sem = asyncio.Semaphore(6)
 def _search_ddg_primp_sync(query: str, max_results: int = 15) -> List[Dict[str, str]]:
     results = []
     import primp
-    # Retry up to 3 times with a fresh randomized browser TLS fingerprint if DDG sends a 202 challenge
-    for attempt in range(3):
-        try:
-            client = primp.Client(impersonate="random", impersonate_os="random", timeout=6)
-            resp = client.post("https://lite.duckduckgo.com/lite/", data={"q": query})
-            if resp.status_code == 200 and len(resp.text) > 15000:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                for tr in soup.find_all("tr"):
-                    link = tr.select_one(".result-link")
-                    if link and link.get("href"):
-                        raw_href = link["href"]
-                        # Unwrap duckduckgo redirect url (/l/?kh=-1&uddg=...)
-                        if "uddg=" in raw_href:
-                            parsed_href = urllib.parse.parse_qs(urllib.parse.urlparse(raw_href).query).get("uddg", [""])[0]
-                        else:
-                            parsed_href = raw_href
-                        if parsed_href:
-                            snippet_text = ""
-                            next_tr = tr.find_next_sibling("tr")
-                            if next_tr:
-                                snip_el = next_tr.select_one(".result-snippet")
-                                if snip_el:
-                                    snippet_text = snip_el.get_text(strip=True)
-                            results.append({
-                                "title": link.get_text(strip=True),
-                                "url": parsed_href,
-                                "snippet": snippet_text
-                            })
-                        if len(results) >= max_results:
-                            break
-                if results:
-                    break
-        except Exception:
-            pass
+    try:
+        client = primp.Client(impersonate="random", impersonate_os="random", timeout=2.5)
+        resp = client.post("https://lite.duckduckgo.com/lite/", data={"q": query})
+        if resp.status_code == 200 and len(resp.text) > 15000:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tr in soup.find_all("tr"):
+                link = tr.select_one(".result-link")
+                if link and link.get("href"):
+                    raw_href = link["href"]
+                    # Unwrap duckduckgo redirect url (/l/?kh=-1&uddg=...)
+                    if "uddg=" in raw_href:
+                        parsed_href = urllib.parse.parse_qs(urllib.parse.urlparse(raw_href).query).get("uddg", [""])[0]
+                    else:
+                        parsed_href = raw_href
+                    if parsed_href:
+                        snippet_text = ""
+                        next_tr = tr.find_next_sibling("tr")
+                        if next_tr:
+                            snip_el = next_tr.select_one(".result-snippet")
+                            if snip_el:
+                                snippet_text = snip_el.get_text(strip=True)
+                        results.append({
+                            "title": link.get_text(strip=True),
+                            "url": parsed_href,
+                            "snippet": snippet_text
+                        })
+                    if len(results) >= max_results:
+                        break
+    except Exception:
+        pass
     return results
 
 

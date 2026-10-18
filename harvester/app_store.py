@@ -92,16 +92,9 @@ async def harvest_app_store(niche: str = "fitness", country: str = "US", limit: 
         contacts = {"email": "", "phone": "", "whatsapp": "", "social_links": {}}
         audit_res = {"audit_score": 35, "pain_points": [], "summary": ""}
 
-        # Discover real developer website if sellerUrl is missing
-        if not web_url or "apple.com" in web_url:
-            clean_seller = re.sub(r'[^\w\s]', '', seller).strip()
-            if len(clean_seller) >= 3:
-                discovered = await ddg_search(f"{clean_seller} official website")
-                for d in discovered[:3]:
-                    d_url = d.get("url", "")
-                    if d_url.startswith("http") and not any(bad in d_url for bad in ["apple.com", "google.com", "wikipedia.org", "linkedin.com"]):
-                        web_url = d_url
-                        break
+        # Fast path: use developer's own registered website
+        if not web_url or "apple.com" in web_url or "youtu" in web_url:
+            return None
 
         # Only audit/crawl the developer's own website
         if web_url and web_url.startswith("http") and "apple.com" not in web_url:

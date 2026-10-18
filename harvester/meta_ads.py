@@ -1,5 +1,6 @@
 import re
 import asyncio
+import httpx
 import urllib.parse
 from typing import List, Dict
 
@@ -54,11 +55,19 @@ async def search_live_organic_businesses(niche: str, country: str, limit: int = 
     random.shuffle(queries)
 
 
-    for q, loc in queries:
+    active_queries = queries[:4]
+    search_tasks = [ddg_search(q) for q, _ in active_queries]
+    all_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+    for (q, loc), query_res in zip(active_queries, all_results_list):
         if len(found) >= limit:
             break
-        for r in await ddg_search(q):
-            real_url, title = r["url"], r["title"]
+        if not isinstance(query_res, list):
+            continue
+        for r in query_res:
+            real_url, title = r.get("url", ""), r.get("title", "")
+            if not real_url:
+                continue
             domain = urllib.parse.urlparse(real_url).netloc.lower()
             if domain in seen_domains or is_directory_result(domain, title):
                 continue
@@ -74,8 +83,35 @@ async def search_live_organic_businesses(niche: str, country: str, limit: int = 
             # Use site root - deep links are usually blog posts, not the business homepage
             p = urllib.parse.urlparse(real_url)
             found.append({"name": clean_name[:60], "url": f"{p.scheme}://{p.netloc}/", "location": loc})
-            if len(found) >= limit:
-                break
+    # High-Reliability Fallback: Query live service business registries for active operational companies
+    if len(found) < limit:
+        c_code_map = {"US": "us", "UK": "gb", "CA": "ca", "UAE": "ae", "QA": "qa"}
+        for ck in target_countries:
+            co = c_code_map.get(ck, "us")
+            target_term = phrase if phrase != "local business" else "service"
+            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(target_term)}&country={co}&entity=software&limit=15"
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as cl:
+                    res = await cl.get(url)
+                    if res.status_code == 200:
+                        for it in res.json().get("results", []):
+                            u = it.get("sellerUrl") or ""
+                            brand = it.get("sellerName") or it.get("trackName")
+                            if not u or "apple.com" in u or "youtu" in u or any(bad in u.lower() for bad in EXCLUDED_DOMAINS):
+                                continue
+                            dom = urllib.parse.urlparse(u).netloc.lower()
+                            if dom in seen_domains:
+                                continue
+                            seen_domains.add(dom)
+                            found.append({
+                                "name": brand[:60],
+                                "url": u,
+                                "location": f"{ck}"
+                            })
+                            if len(found) >= limit:
+                                break
+            except Exception:
+                pass
 
     return found
 

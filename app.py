@@ -69,8 +69,8 @@ async def run_scan(req: ScanRequest):
     # Clear previous leads so every scan displays 100% fresh organic batch without carrying old baggage
     db.clear_all_leads()
 
-    # Boosted volume: harvest up to 35 targets per source so user gets rich lead volume
-    per_source_limit = min(35, max(8, req.limit // max(1, len(req.sources))))
+    # Balanced volume across all selected sources
+    per_source_limit = max(2, min(10, req.limit // max(1, len(req.sources))))
 
     tasks = []
     if "meta_ads" in req.sources:

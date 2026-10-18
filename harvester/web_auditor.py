@@ -52,6 +52,7 @@ async def audit_website(url: str) -> Dict[str, Any]:
                 }
 
             html = res.text
+            html_lower = html.lower()
             soup = BeautifulSoup(html, "html.parser")
 
             # 1. CRITICAL: Insecure SSL (Browser shows 'Not Secure' warning, destroys customer trust)

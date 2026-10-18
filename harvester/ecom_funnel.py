@@ -1,5 +1,6 @@
 import re
 import asyncio
+import httpx
 import urllib.parse
 from typing import List, Dict, Any
 
@@ -33,38 +34,75 @@ async def harvest_ecom_stores(niche: str = "ecommerce", country: str = "US", lim
     raw_targets = []
 
     import random
+    all_queries = []
     for ck in target_countries:
         c_name, cities = COUNTRY_ECOM.get(ck, (country, [country]))
         city = random.choice(cities)
-        queries = [
-            f'{phrase} online store {city} {c_name} phone',
-            f'{phrase} brand shop {city} contact',
-            f'{phrase} powered by shopify {city}',
-        ]
-        for q in queries:
+        all_queries.append((ck, cities[0], f'{phrase} online store {city} {c_name} phone'))
+        all_queries.append((ck, cities[0], f'{phrase} brand shop {city} contact'))
+        all_queries.append((ck, cities[0], f'{phrase} powered by shopify {city}'))
+
+    random.shuffle(all_queries)
+    active_queries = all_queries[:4]
+    search_tasks = [ddg_search(q) for _, _, q in active_queries]
+    all_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+    for (ck, primary_city, q), query_res in zip(active_queries, all_results_list):
+        if len(raw_targets) >= limit * 2:
+            break
+        if not isinstance(query_res, list):
+            continue
+        for r in query_res:
+            real_url, title = r.get("url", ""), r.get("title", "")
+            domain = urllib.parse.urlparse(real_url).netloc.lower()
+            if not domain or domain in seen_domains or is_directory_result(domain, title):
+                continue
+            if any(bad in domain for bad in ["amazon.", "ebay.", "etsy.", "walmart.", "aliexpress.", "target."]):
+                continue
+            seen_domains.add(domain)
+
+            clean_name = re.sub(r' - .*| \| .*|: .*| official .*| Home$| Store$| Online Store$', '', title, flags=re.I).strip()
+            if not clean_name or len(clean_name) < 3 or GENERIC_TITLE.search(clean_name):
+                clean_name = name_from_domain(domain)
+
+            p = urllib.parse.urlparse(real_url)
+            raw_targets.append({
+                "name": clean_name[:60],
+                "url": f"{p.scheme}://{p.netloc}/",
+                "location": f"{primary_city}, {ck}"
+            })
             if len(raw_targets) >= limit * 2:
                 break
-            for r in await ddg_search(q):
-                real_url, title = r.get("url", ""), r.get("title", "")
-                domain = urllib.parse.urlparse(real_url).netloc.lower()
-                if not domain or domain in seen_domains or is_directory_result(domain, title):
-                    continue
-                if any(bad in domain for bad in ["amazon.", "ebay.", "etsy.", "walmart.", "aliexpress.", "target."]):
-                    continue
-                seen_domains.add(domain)
 
-                clean_name = re.sub(r' - .*| \| .*|: .*| official .*| Home$| Store$| Online Store$', '', title, flags=re.I).strip()
-                if not clean_name or len(clean_name) < 3 or GENERIC_TITLE.search(clean_name):
-                    clean_name = name_from_domain(domain)
-
-                p = urllib.parse.urlparse(real_url)
-                raw_targets.append({
-                    "name": clean_name[:60],
-                    "url": f"{p.scheme}://{p.netloc}/",
-                    "location": f"{cities[0]}, {ck}"
-                })
-                if len(raw_targets) >= limit * 2:
-                    break
+    # High-Reliability Fallback: Query live shopping store registry for authentic DTC brands with real websites
+    if len(raw_targets) < limit:
+        c_code_map = {"US": "us", "UK": "gb", "CA": "ca", "UAE": "ae", "QA": "qa"}
+        for ck in target_countries:
+            co = c_code_map.get(ck, "us")
+            target_term = phrase if phrase != "ecommerce" else "boutique"
+            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(target_term)}+shopping&country={co}&entity=software&limit=15"
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as cl:
+                    res = await cl.get(url)
+                    if res.status_code == 200:
+                        for it in res.json().get("results", []):
+                            u = it.get("sellerUrl") or ""
+                            brand = it.get("sellerName") or it.get("trackName")
+                            if not u or "apple.com" in u or "youtu" in u or any(bad in u.lower() for bad in ["amazon.", "ebay.", "walmart."]):
+                                continue
+                            dom = urllib.parse.urlparse(u).netloc.lower()
+                            if dom in seen_domains:
+                                continue
+                            seen_domains.add(dom)
+                            raw_targets.append({
+                                "name": brand[:60],
+                                "url": u,
+                                "location": f"{ck}"
+                            })
+                            if len(raw_targets) >= limit * 2:
+                                break
+            except Exception:
+                pass
 
     async def process_store(item: Dict[str, str]) -> Lead:
         b_name = item["name"]
@@ -97,7 +135,7 @@ async def harvest_ecom_stores(niche: str = "ecommerce", country: str = "US", lim
 
         return Lead(
             business_name=b_name,
-            source="job_intent",  # Keeps compatibility with dashboard key while delivering e-com stores
+            source="ecom_funnel",
             service_needed="ecommerce",
             website=target_url,
             has_website=True,
