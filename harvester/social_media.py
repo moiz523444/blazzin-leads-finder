@@ -29,16 +29,17 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
     target_term = phrase if phrase != "local business" else "business"
 
     queries = [
-        # LinkedIn Company & Founder Outreach
-        (f'site:linkedin.com/company "{target_term}" "{c_name}" contact OR email', "LinkedIn", "linkedin"),
-        # Instagram Business Profiles (with WhatsApp & Emails in bio)
-        (f'site:instagram.com "{target_term}" "{main_city}" whatsapp OR email', "Instagram", "instagram"),
-        # Facebook Business Pages (Commercial services)
-        (f'site:facebook.com "{target_term}" "{main_city}" "call" OR "whatsapp"', "Facebook", "facebook"),
-        # Reddit Hiring & Project Requests
-        (f'site:reddit.com/r/forhire OR site:reddit.com/r/webdev "hiring" "{target_term}" OR "website"', "Reddit", "reddit"),
-        # X / Twitter Agency & Project Requests
-        (f'site:x.com OR site:twitter.com "looking for web developer" OR "need a website" "{target_term}"', "X / Twitter", "twitter")
+        # Reddit Client Requests (Real people with budget looking for developers/agencies)
+        (f'site:reddit.com/r/forhire OR site:reddit.com/r/freelance_forhire "[Hiring]" "{target_term}" OR "website" OR "developer" OR "software"', "Reddit", "reddit"),
+        (f'site:reddit.com/r/webdev OR site:reddit.com/r/ecommerce "need a developer" OR "looking for agency" OR "custom software"', "Reddit", "reddit"),
+        # X / Twitter Direct Client Project Inquiries
+        (f'site:x.com OR site:twitter.com ("looking for a web developer" OR "need a custom website" OR "looking for software agency" OR "need an app built") "{target_term}"', "X / Twitter", "twitter"),
+        # LinkedIn Founders & Decision Makers actively seeking agency help
+        (f'site:linkedin.com/in/ ("looking for web developer" OR "need a software developer" OR "seeking dev agency" OR "looking for frontend developer") "{c_name}"', "LinkedIn", "linkedin"),
+        # Facebook Commercial Business Pages needing custom systems
+        (f'site:facebook.com "{target_term}" "{main_city}" ("whatsapp" OR "call" OR "email")', "Facebook", "facebook"),
+        # Instagram Business Accounts needing web/funnels
+        (f'site:instagram.com "{target_term}" "{main_city}" ("whatsapp" OR "email" OR "contact")', "Instagram", "instagram"),
     ]
 
     leads = []
@@ -122,57 +123,5 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
                 status="new"
             ))
 
-    # Fallback to verified active social business catalogs if live dork returns small count
-    if len(leads) < limit:
-        SOCIAL_CATALOG = [
-            # United States
-            ("Apex Global Tech Partners", "https://linkedin.com/company/apex-global-tech", "contact@apexglobalpartners.com", "+1 212 905 3300", "New York, US", "LinkedIn"),
-            ("SoHo Creator Studio", "https://instagram.com/sohocreatorstudio", "bookings@sohostudio.com", "+1 310 854 4800", "Los Angeles, US", "Instagram"),
-            ("LoneStar Logistics Network", "https://facebook.com/lonestarlogistics", "dispatch@lonestarlogistics.com", "+1 713 671 2000", "Houston, US", "Facebook"),
-            ("Austin SaaS Dev Group", "https://x.com/austinsaasdev", "hello@austinsaasdev.com", "+1 512 476 1234", "Austin, US", "X / Twitter"),
-            ("RedLine E-Com Agency", "https://reddit.com/user/redline_ecom", "growth@redlineecom.com", "+1 312 944 4700", "Chicago, US", "Reddit"),
-
-            # United Arab Emirates
-            ("Dubai Horizon Properties Social", "https://instagram.com/dubaihorizonproperties", "sales@horizonproperties.ae", "+971 4 399 5566", "Dubai, UAE", "Instagram"),
-            ("Gulf Elite Chauffeur Services", "https://facebook.com/gulfelitechauffeur", "vip@gulfelite.ae", "+971 4 388 9900", "Dubai, UAE", "Facebook"),
-
-            # United Kingdom
-            ("London Fintech Builders", "https://linkedin.com/company/london-fintech-builders", "connect@londonfintech.co.uk", "+44 20 7946 0888", "London, UK", "LinkedIn"),
-            ("Mayfair Luxury Concierge Social", "https://instagram.com/mayfairluxuryconcierge", "info@mayfairconcierge.co.uk", "+44 20 7247 9911", "London, UK", "Instagram"),
-        ]
-        for name, profile_url, em, ph, loc, plat in SOCIAL_CATALOG:
-            if len(leads) >= limit:
-                break
-            ck = loc.split(", ")[-1]
-            if country_up != "ALL" and ck != country_up:
-                continue
-            if em in seen or ph in seen:
-                continue
-            seen.add(em)
-            seen.add(ph)
-
-            leads.append(Lead(
-                business_name=name,
-                source="social_media",
-                service_needed="web_development",
-                website=profile_url,
-                has_website=False,
-                location=loc,
-                email=em,
-                phone=ph,
-                whatsapp=clean_whatsapp_number(ph),
-                social_links={"profile": profile_url},
-                pain_points=[
-                    f"Direct {plat} outreach opportunity",
-                    "Active brand presence requiring custom automated booking / website funnel",
-                    "High intent client with verified email & direct telephone"
-                ],
-                intent_level="High",
-                budget_estimate="$2,500 - $7,000",
-                audit_score=50,
-                audit_summary=f"Commercial lead sourced from {plat}. Ready for custom software or website pitch.",
-                ai_pitch=f"Hi {name} Team,\n\nI was looking at your active business on {plat} ({loc}) and noticed an opportunity to build a high-converting web funnel to capture client inquiries automatically. Would you be open to a 2-minute walkthrough?",
-                status="new"
-            ))
-
     return leads
+

@@ -71,7 +71,7 @@ async def run_scan(req: ScanRequest):
     tasks = []
     if "meta_ads" in req.sources:
         tasks.append(harvest_meta_ads(niche=req.niche, country=req.country, limit=per_source_limit))
-    if "job_intent" in req.sources:
+    if "ecom_funnel" in req.sources or "job_intent" in req.sources:
         tasks.append(harvest_ecom_stores(niche=req.niche, country=req.country, limit=per_source_limit))
     if "new_business" in req.sources:
         tasks.append(harvest_zero_website_leads(niche=req.niche, country=req.country, limit=per_source_limit))
@@ -85,18 +85,20 @@ async def run_scan(req: ScanRequest):
         if isinstance(res, list):
             all_harvested.extend(res)
 
-    saved_leads = []
-    # Enrich with AI Pitches and save into Database
-    for lead in all_harvested:
-        # STRICT RULE: Must have at least one reachable contact (phone, whatsapp, or email)
-        if not (lead.phone or lead.whatsapp or lead.email):
-            continue
+    valid_leads = [
+        lead for lead in all_harvested
+        if (lead.phone or lead.whatsapp or lead.email)
+    ]
 
+    async def enrich_lead(lead: Lead):
         lead.ai_pitch = await generate_pitch(lead, gemini_api_key=req.gemini_api_key)
         lead_id = db.save_lead(lead)
         if lead_id:
             lead.id = lead_id
-        saved_leads.append(lead.model_dump())
+        return lead.model_dump()
+
+    # Parallel enrichment for maximum speed
+    saved_leads = await asyncio.gather(*(enrich_lead(l) for l in valid_leads), return_exceptions=False)
 
     return {
         "success": True,

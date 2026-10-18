@@ -123,6 +123,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const sourceLabels = {
                 social_media: "Social & Founders 🌐",
                 meta_ads: "Website Tech Revamp ⚡",
+                ecom_funnel: "E-Commerce Revamp 🛍️",
                 job_intent: "E-Commerce Revamp 🛍️",
                 new_business: "Zero Website (Hot Lead 🔥)",
                 app_store: "Mobile App Overhaul 📱"
