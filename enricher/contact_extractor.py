@@ -46,88 +46,85 @@ COUNTRY_DEFAULT_REGIONS = {
     "UAE": "AE", "QA": "QA", "US": "US", "UK": "GB", "CA": "CA"
 }
 
-def format_phone_international(raw: str, default_country: str = "US") -> Tuple[Optional[str], Optional[str]]:
+def phone_info(raw: str, default_country: str = "US", allow_fallback: bool = False) -> Tuple[Optional[str], Optional[str], bool]:
     """
-    Validates and formats a phone number into:
-    - (formatted_international, whatsapp_clean_digits)
-    Returns (None, None) if the number is invalid, fake, or uncallable.
+    Validates a phone number and returns (formatted_international, e164_digits, is_mobile).
+    Returns (None, None, False) if the number is invalid, fake, or uncallable.
+    Numbers without a leading + are parsed for the lead's own country only; trying every
+    region (allow_fallback) turns random digit strings into "valid" foreign numbers.
     """
     if not raw or not raw.strip():
-        return (None, None)
+        return (None, None, False)
 
-    # Fast clean
     clean_raw = raw.strip()
+    if clean_raw.startswith("00"):
+        clean_raw = "+" + clean_raw[2:]
     digits = re.sub(r"\D", "", clean_raw)
     if not (7 <= len(digits) <= 15):
-        return (None, None)
+        return (None, None, False)
 
     # Disallow template repetitions
     if re.search(r"(\d)\1{5,}", digits):
-        return (None, None)
+        return (None, None, False)
     if any(seq in digits for seq in ("123456", "234567", "987654", "55501", "55512", "55533")):
-        return (None, None)
+        return (None, None, False)
 
     reg = COUNTRY_DEFAULT_REGIONS.get((default_country or "US").upper(), "US")
+    regions = [None] if clean_raw.startswith("+") else [reg]
+    if allow_fallback and not clean_raw.startswith("+"):
+        regions += [r for r in ("AE", "GB", "US", "QA", "CA") if r != reg]
 
-    # Try parsing
     parsed_num = None
-    # 1. If starts with +, parse directly
-    if clean_raw.startswith("+"):
+    for region in regions:
         try:
-            p = phonenumbers.parse(clean_raw, None)
+            p = phonenumbers.parse(clean_raw, region)
             if phonenumbers.is_valid_number(p):
                 parsed_num = p
+                break
         except Exception:
             pass
 
-    # 2. Try with default region
     if not parsed_num:
-        try:
-            p = phonenumbers.parse(clean_raw, reg)
-            if phonenumbers.is_valid_number(p):
-                parsed_num = p
-        except Exception:
-            pass
-
-    # 3. Try with other major regions if still not valid
-    if not parsed_num:
-        for fallback_reg in ["AE", "GB", "US", "QA", "CA"]:
-            if fallback_reg == reg:
-                continue
-            try:
-                p = phonenumbers.parse(clean_raw, fallback_reg)
-                if phonenumbers.is_valid_number(p):
-                    parsed_num = p
-                    break
-            except Exception:
-                pass
-
-    if not parsed_num:
-        return (None, None)
+        return (None, None, False)
 
     formatted = phonenumbers.format_number(parsed_num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
-    wa_digits = phonenumbers.format_number(parsed_num, phonenumbers.PhoneNumberFormat.E164).replace("+", "")
+    e164_digits = phonenumbers.format_number(parsed_num, phonenumbers.PhoneNumberFormat.E164).replace("+", "")
+    # US/CA numbers are FIXED_LINE_OR_MOBILE (undeterminable) - only a definite MOBILE counts
+    is_mobile = phonenumbers.number_type(parsed_num) == phonenumbers.PhoneNumberType.MOBILE
+    return (formatted, e164_digits, is_mobile)
 
-    return (formatted, wa_digits)
+
+def format_phone_international(raw: str, default_country: str = "US", allow_fallback: bool = False) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Validates and formats a phone number into (formatted_international, whatsapp_digits).
+    whatsapp_digits is only set for numbers that are definitely mobile (landlines can't use WhatsApp).
+    Returns (None, None) if the number is invalid, fake, or uncallable.
+    """
+    formatted, digits, is_mobile = phone_info(raw, default_country, allow_fallback)
+    if not formatted:
+        return (None, None)
+    return (formatted, digits if is_mobile else "")
 
 
-def is_valid_phone(raw: str) -> bool:
-    fmt, _ = format_phone_international(raw)
+def is_valid_phone(raw: str, default_country: str = "US") -> bool:
+    fmt, _, _ = phone_info(raw, default_country)
     return fmt is not None
 
 
-def clean_whatsapp_number(raw: str) -> str:
-    """Returns E164 digits without plus (e.g. 971505912922)"""
-    _, wa = format_phone_international(raw)
-    if wa:
-        return wa
-    digits = re.sub(r'\D', '', raw or "")
-    if digits.startswith("00"):
-        digits = digits[2:]
-    return digits if 8 <= len(digits) <= 15 else ""
+def clean_whatsapp_number(raw: str, default_country: str = "US") -> str:
+    """Returns E164 digits without plus (e.g. 971505912922) for a valid number, else ''."""
+    _, digits, _ = phone_info(raw, default_country)
+    return digits or ""
 
 
-async def extract_contacts_from_url(url: str) -> Dict[str, Any]:
+def _visible_text(soup: BeautifulSoup) -> str:
+    """Page text a visitor actually sees - scripts/styles hold IDs and timestamps that look like phones."""
+    for tag in soup(["script", "style", "noscript", "svg", "template"]):
+        tag.decompose()
+    return soup.get_text(" ", strip=True)
+
+
+async def extract_contacts_from_url(url: str, default_country: str = "US") -> Dict[str, Any]:
     """
     Crawls home page and subpages (/contact, /contact-us, /about) to extract:
     - Real Email addresses (placeholders rejected, business's own domain preferred)
@@ -223,43 +220,46 @@ async def extract_contacts_from_url(url: str) -> Dict[str, Any]:
                 if is_valid_email(e):
                     email_candidates.append(e)
 
-            # 3. Find tel: links or visible phone numbers in HTML
-            if not contacts["phone"]:
-                for tag in soup.select("a[href^='tel:']"):
-                    raw_phone = tag.get("href", "").replace("tel:", "").strip()
-                    fmt_p, wa_d = format_phone_international(raw_phone)
-                    if fmt_p:
-                        contacts["phone"] = fmt_p
-                        if not contacts["whatsapp"] and wa_d:
-                            contacts["whatsapp"] = wa_d
-                        break
-
-            # 3b. Search visible text for phone patterns (US, UK, CA numbers)
-            if not contacts["phone"]:
-                for match in re.finditer(PHONE_REGEX, html):
-                    candidate = match.group(0).strip()
-                    fmt_p, wa_d = format_phone_international(candidate)
-                    if fmt_p:
-                        contacts["phone"] = fmt_p
-                        if not contacts["whatsapp"] and wa_d:
-                            contacts["whatsapp"] = wa_d
-                        break
-
-            # 4. Find WhatsApp direct links
+            # 3. WhatsApp direct links (the business itself published this as its WhatsApp)
             if not contacts["whatsapp"]:
                 wa_tags = soup.select("a[href*='wa.me'], a[href*='api.whatsapp.com'], a[href*='whatsapp.com/send']")
                 for tag in wa_tags:
                     href = tag.get("href", "")
-                    wa_match = re.search(r'(?:wa\.me/|phone=|send\?phone=)([0-9+]+)', href)
+                    wa_match = re.search(r'(?:wa\.me/|phone=|send\?phone=)\+?([0-9]+)', href)
                     if wa_match:
-                        cleaned_wa = clean_whatsapp_number(wa_match.group(1))
-                        if 10 <= len(cleaned_wa) <= 15 and is_valid_phone(cleaned_wa):
-                            contacts["whatsapp"] = cleaned_wa
+                        # wa.me numbers are always international without '+'
+                        fmt_w, digits_w, _ = phone_info("+" + wa_match.group(1), default_country)
+                        if fmt_w:
+                            contacts["whatsapp"] = digits_w
                             if not contacts["phone"]:
-                                contacts["phone"] = "+" + cleaned_wa
+                                contacts["phone"] = fmt_w
                             break
 
-            # 5. Extract Social Profiles
+            # 4. tel: links (explicit click-to-call numbers)
+            if not contacts["phone"]:
+                for tag in soup.select("a[href^='tel:']"):
+                    raw_phone = tag.get("href", "").replace("tel:", "").strip()
+                    fmt_p, wa_d = format_phone_international(raw_phone, default_country)
+                    if fmt_p:
+                        contacts["phone"] = fmt_p
+                        if not contacts["whatsapp"] and wa_d:
+                            contacts["whatsapp"] = wa_d
+                        break
+
+            # 5. Phone patterns in the visible page text only
+            if not contacts["phone"]:
+                for match in re.finditer(PHONE_REGEX, _visible_text(BeautifulSoup(html, "html.parser"))):
+                    candidate = match.group(0).strip()
+                    if len(re.sub(r"\D", "", candidate)) < 8:
+                        continue
+                    fmt_p, wa_d = format_phone_international(candidate, default_country)
+                    if fmt_p:
+                        contacts["phone"] = fmt_p
+                        if not contacts["whatsapp"] and wa_d:
+                            contacts["whatsapp"] = wa_d
+                        break
+
+            # 6. Extract Social Profiles
             for a in soup.find_all("a", href=True):
                 href = a["href"].strip()
                 href_l = href.lower()

@@ -12,7 +12,7 @@
         href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
     <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 
@@ -107,7 +107,18 @@
                         <label class="section-label">High-Intent Channels</label>
                         <div class="source-toggles">
                             <label class="toggle-card">
-                                <input type="checkbox" name="source" value="new_business" checked>
+                                <input type="checkbox" name="source" value="local_verified" checked>
+                                <span class="toggle-custom">
+                                    <i data-lucide="map-pin"></i>
+                                    <div>
+                                        <strong>Verified Local Businesses ✅ (Recommended)</strong>
+                                        <small>Map-listed businesses in every state, real phone, no website or a site with confirmed problems</small>
+                                    </div>
+                                </span>
+                            </label>
+
+                            <label class="toggle-card">
+                                <input type="checkbox" name="source" value="new_business">
                                 <span class="toggle-custom">
                                     <i data-lucide="sparkles"></i>
                                     <div>
@@ -118,7 +129,7 @@
                             </label>
 
                             <label class="toggle-card">
-                                <input type="checkbox" name="source" value="meta_ads" checked>
+                                <input type="checkbox" name="source" value="meta_ads">
                                 <span class="toggle-custom">
                                     <i data-lucide="gauge"></i>
                                     <div>
@@ -129,7 +140,7 @@
                             </label>
 
                             <label class="toggle-card">
-                                <input type="checkbox" name="source" value="ecom_funnel" checked>
+                                <input type="checkbox" name="source" value="ecom_funnel">
                                 <span class="toggle-custom">
                                     <i data-lucide="shopping-bag"></i>
                                     <div>
@@ -140,7 +151,7 @@
                             </label>
 
                             <label class="toggle-card">
-                                <input type="checkbox" name="source" value="app_store" checked>
+                                <input type="checkbox" name="source" value="app_store">
                                 <span class="toggle-custom">
                                     <i data-lucide="smartphone"></i>
                                     <div>
@@ -151,7 +162,7 @@
                             </label>
 
                             <label class="toggle-card">
-                                <input type="checkbox" name="source" value="social_media" checked>
+                                <input type="checkbox" name="source" value="social_media">
                                 <span class="toggle-custom">
                                     <i data-lucide="share-2"></i>
                                     <div>
@@ -193,6 +204,14 @@
                             <option value="CA">🇨🇦 Canada (CA)</option>
                             <option value="UAE">🇦🇪 United Arab Emirates / Dubai (UAE)</option>
                             <option value="QA">🇶🇦 Qatar / Doha (QA)</option>
+                        </select>
+                    </div>
+
+                    <!-- Target State / Province -->
+                    <div class="form-group">
+                        <label for="regionInput" class="section-label">State / Province / Emirate</label>
+                        <select id="regionInput" class="form-select">
+                            <option value="all" selected>🔄 Rotate through all states (new ones every scan)</option>
                         </select>
                     </div>
 
@@ -259,6 +278,7 @@
                     <div class="filter-group">
                         <select id="filterSource" class="filter-select">
                             <option value="all">All Channels</option>
+                            <option value="local_verified">Verified Local Businesses ✅</option>
                             <option value="social_media">Social & Founders (LinkedIn/IG/FB/X/Reddit) 🌐</option>
                             <option value="new_business">Zero-Website (Hot Leads 🔥)</option>
                             <option value="meta_ads">Website Tech Revamp ⚡</option>
@@ -275,9 +295,14 @@
                             <option value="QA">🇶🇦 Qatar / Doha</option>
                         </select>
 
+                        <select id="filterRegion" class="filter-select">
+                            <option value="all">All States</option>
+                        </select>
+
                         <select id="filterService" class="filter-select">
                             <option value="all">All Services</option>
-                            <option value="web_development">Web Development</option>
+                            <option value="web_development">Web Development (no website)</option>
+                            <option value="website_redesign">Website Redesign</option>
                             <option value="mobile_apps">Mobile Apps</option>
                             <option value="ecommerce">E-Commerce</option>
                             <option value="seo">SEO Optimization</option>
@@ -350,7 +375,7 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=2.1"></script>
+    <script src="/static/js/app.js?v=3.0"></script>
 </body>
 
 </html>

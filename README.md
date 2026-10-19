@@ -1,80 +1,55 @@
-# Omni-Lead AI Engine 🚀
-### Autonomous High-Intent Client Acquisition Platform for Software Agencies
+# Blazzin Leads Finder
 
-Omni-Lead AI is an automated multi-channel lead generation and cold outreach system built specifically to target high-budget clients for:
-- **Web Development & Web Applications**
-- **Mobile Applications (iOS & Android)**
-- **E-Commerce Stores & Shopify Migrations**
-- **SEO & Performance Optimization**
-- **Social Media Marketing & Brand Identity**
+Finds local businesses in the **US, UK, Canada, UAE and Qatar** that show real evidence of needing
+web / digital services, with their verified phone number, and writes an outreach pitch for each.
 
----
+## Where leads come from
 
-## ⚡ Why This Beats Traditional Google Maps Scrapers
+**Verified Local Businesses** (default channel, [harvester/local_business.py](harvester/local_business.py)):
 
-Unlike generic scrapers that spam thousands of saturated Google Maps listings:
-1. **Meta Ad Spenders (Active Ad Budgets):** Targets businesses currently spending money on Facebook & Instagram ads whose landing pages are broken, missing mobile optimization, or have no website at all.
-2. **Job Board Reverse-Engineering:** Targets companies actively recruiting full-time developers and marketers on job boards (with salaries of $3,000 - $8,000/mo) and pitches agency replacement at half the overhead.
-3. **Fresh Company Registrations (0 - 30 Days Old):** Pulls newly incorporated UK & US companies before they even list on Google Maps. Zero competitors have contacted them yet (First-Mover Advantage).
-4. **App Store Revamp Scanner:** Finds mobile applications on Google Play & App Store with poor ratings (2.0 - 3.8 stars) and user complaints, ready for a Flutter/React Native rebuild.
+1. Picks states / provinces / emirates from [harvester/regions.py](harvester/regions.py) - every state of all
+   5 countries. "Rotate" mode picks different ones every scan; you can also pick one state.
+2. Pulls business listings for the chosen niche from map data:
+   - **TomTom Search API** when `TOMTOM_API_KEY` is set (free, recommended), otherwise
+   - **OpenStreetMap Overpass** (free, no key, but the public servers are slow and often busy).
+3. Keeps only independent businesses (chains removed) with a phone number that is valid for that country.
+   WhatsApp is only filled when the number is a confirmed mobile or the business published a wa.me link.
+4. Keeps a business only if there is evidence it needs you:
+   - **No website**: none on its listing and no live website for its name (checked after confirming our own
+     internet connection works), or only a Facebook/Instagram page; or
+   - **Website problems actually observed**: broken/down, no HTTPS, invalid SSL, not mobile-friendly,
+     outdated WordPress/jQuery, old copyright year, poor Google PageSpeed mobile score (with `PAGESPEED_API_KEY`).
+5. Emails come only from the business's own listing or website.
 
----
+The older search-engine channels (website revamp, e-commerce, zero-website, app store, social) are still
+available as checkboxes; their fake App Store "fallbacks" and invented pain points have been removed.
 
-## 🛠️ Project Structure
+## Setup
 
-```
-omni-lead-ai/
-├── app.py                     # FastAPI web server & live API routes
-├── database.py                # SQLite database with auto-deduplication & stats
-├── models.py                  # Pydantic data models for leads, filters & audits
-├── test_server.py             # Pipeline test and sample lead runner
-│
-├── harvester/
-│   ├── meta_ads.py            # Meta Ad Library scanner (Broken funnels & ad spenders)
-│   ├── job_intent.py          # Job board scanner (Indeed, RemoteOK, hiring budgets)
-│   ├── new_companies.py       # Fresh business registry (UK Companies House & LLCs)
-│   ├── app_store.py           # Outdated & low-rated mobile apps scanner
-│   └── web_auditor.py         # Real-time website speed, SSL & tech auditor
-│
-├── enricher/
-│   ├── contact_extractor.py   # Extracts Emails, Phone numbers, WhatsApp, Socials
-│   └── ai_pitcher.py          # AI personalized outreach pitch generator
-│
-├── static/
-│   ├── css/style.css          # Modern dark glassmorphic UI design
-│   └── js/app.js              # Real-time dashboard controller
-└── templates/
-    └── index.html             # Command Center Dashboard
-```
-
----
-
-## 🚀 How to Run the System
-
-The server is currently **active and running locally**:
-
-👉 **Open your browser and navigate to:**
-```
-http://127.0.0.1:8000
-```
-
-### To Restart the Server Anytime:
 ```powershell
-cd C:\Users\DELL\.gemini\antigravity-ide\scratch\omni-lead-ai
-& "C:\Users\DELL\AppData\Local\Programs\Python\Python311\python.exe" -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+pip install -r requirements.txt
+copy .env.example .env   # then paste your free keys into .env
+python -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
----
+Open http://127.0.0.1:8000
 
-## 🎯 Key Features in the Dashboard
+### Free keys (optional but strongly recommended)
 
-- **Autonomous Multi-Source Scanner:** Choose any combination of Meta Ads, Job Boards, Fresh Registrations, or App Store listings.
-- **Niche & Country Selector:** Target Healthcare, E-Commerce, Real Estate, Logistics, or Tech in US, UK, UAE, Canada, Australia, etc.
-- **Batch Volume Control:** Select from 10 up to 200 leads per batch run.
-- **Real-time Live Engine Console:** Watch the scraper log activities live.
-- **1-Click AI Outreach Modal:**
-  - View detected pain points & technical audit score.
-  - Review the hyper-personalized pitch tailored to the specific lead.
-  - **1-Click Direct WhatsApp:** Opens WhatsApp Web with the customized pitch pre-filled!
-  - **1-Click Email:** Opens default mail client ready to send.
-- **Export to CSV:** Download all extracted leads with contact details and AI pitches.
+| Key | Where | Free limit |
+|---|---|---|
+| `TOMTOM_API_KEY` | https://developer.tomtom.com - sign up, Dashboard -> Keys | 2,500 requests/day, no card |
+| `PAGESPEED_API_KEY` | Google Cloud console -> enable "PageSpeed Insights API" -> Credentials -> API key | 25,000/day |
+
+A scan uses about 2 TomTom requests per city searched (roughly 10-20 per scan).
+
+## Data
+
+Leads are stored in `leads.db` (SQLite, git-ignored). Scans add new leads and skip ones already saved,
+so contacted status is kept. "Clear" in the dashboard deletes everything.
+
+## Troubleshooting
+
+- **Few or no leads without a TomTom key**: the free OpenStreetMap servers were too busy - scan again or add the key.
+- **Random "connection failed" errors**: if your internet's DNS is unreliable, set Windows DNS to `1.1.1.1` / `8.8.8.8`.
+- Cold outreach in the UK/EU (PECR/GDPR), Canada (CASL) and UAE has rules - include an opt-out in your messages.

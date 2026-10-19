@@ -48,6 +48,55 @@ document.addEventListener("DOMContentLoaded", () => {
         volumeValue.textContent = `${e.target.value} Leads`;
     });
 
+    // Lead data is scraped from third-party pages - escape it before putting it into HTML
+    function esc(value) {
+        return String(value ?? "")
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+    function safeUrl(url) {
+        return /^https?:\/\//i.test(url || "") ? esc(url) : "#";
+    }
+
+    // States / provinces per country
+    const countryInput = document.getElementById("countryInput");
+    const regionInput = document.getElementById("regionInput");
+    const filterRegion = document.getElementById("filterRegion");
+    let regionsByCountry = {};
+
+    function fillRegionSelect(select, country, allLabel) {
+        const current = select.value;
+        select.innerHTML = "";
+        const all = document.createElement("option");
+        all.value = "all";
+        all.textContent = allLabel;
+        select.appendChild(all);
+        const list = (country && country.toUpperCase() !== "ALL") ? (regionsByCountry[country.toUpperCase()] || []) : [];
+        list.forEach(r => {
+            const o = document.createElement("option");
+            o.value = r;
+            o.textContent = r;
+            select.appendChild(o);
+        });
+        select.disabled = list.length === 0;
+        if (list.includes(current)) select.value = current;
+    }
+
+    async function loadRegions() {
+        try {
+            const res = await fetch("/api/regions");
+            regionsByCountry = (await res.json()).regions || {};
+        } catch (err) {
+            console.error("Error loading regions:", err);
+        }
+        fillRegionSelect(regionInput, countryInput.value, "🔄 Rotate through all states (new ones every scan)");
+        fillRegionSelect(filterRegion, filterCountry.value, "All States");
+    }
+
+    countryInput.addEventListener("change", () => {
+        fillRegionSelect(regionInput, countryInput.value, "🔄 Rotate through all states (new ones every scan)");
+    });
+
     // Logging helper
     function addLog(msg, type = "normal") {
         const line = document.createElement("div");
@@ -65,11 +114,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const ctry = filterCountry ? filterCountry.value : "all";
         const srv = filterService.value;
         const st = filterStatus.value;
+        const rgn = filterRegion ? filterRegion.value : "all";
 
         const params = new URLSearchParams();
         if (s) params.append("search", s);
         if (src !== "all") params.append("source", src);
         if (ctry !== "all") params.append("country", ctry);
+        if (rgn !== "all") params.append("region", rgn);
         if (srv !== "all") params.append("service", srv);
         if (st !== "all") params.append("status", st);
 
@@ -117,29 +168,36 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const painsHtml = (l.pain_points || [])
                 .slice(0, 3)
-                .map(p => `<span class="pain-chip"><i data-lucide="alert-circle" style="width:12px;height:12px"></i> ${p}</span>`)
+                .map(p => `<span class="pain-chip"><i data-lucide="alert-circle" style="width:12px;height:12px"></i> ${esc(p)}</span>`)
                 .join("");
 
             const sourceLabels = {
+                local_verified: "Verified Local ✅",
                 social_media: "Social & Founders 🌐",
                 meta_ads: "Website Tech Revamp ⚡",
                 ecom_funnel: "E-Commerce Revamp 🛍️",
-                job_intent: "E-Commerce Revamp 🛍️",
+                job_intent: "Hiring Company 💼",
                 new_business: "Zero Website (Hot Lead 🔥)",
                 app_store: "Mobile App Overhaul 📱"
             };
 
-            const webHtml = l.has_website && l.website 
-                ? `<a href="${l.website}" target="_blank" class="lead-website"><i data-lucide="globe" style="width:14px;height:14px"></i> ${l.website.replace(/^https?:\/\/(www\.)?/, '')}</a>`
-                : `<span class="lead-website no-site"><i data-lucide="alert-triangle" style="width:14px;height:14px"></i> Zero Website (High Priority)</span>`;
+            const webHtml = l.has_website && l.website
+                ? `<a href="${safeUrl(l.website)}" target="_blank" rel="noopener noreferrer" class="lead-website"><i data-lucide="globe" style="width:14px;height:14px"></i> ${esc(l.website.replace(/^https?:\/\/(www\.)?/, ''))}</a>`
+                : `<span class="lead-website no-site"><i data-lucide="alert-triangle" style="width:14px;height:14px"></i> No Website Found</span>`;
+
+            const phoneDigits = (l.phone || "").replace(/[^0-9+]/g, "");
+            const waDigits = (l.whatsapp || "").replace(/[^0-9]/g, "");
+            const sourceTag = (l.source || "").replace(/[^a-z_]/g, "");
+            const statusTag = (l.status || "").replace(/[^a-z_]/g, "");
 
             card.innerHTML = `
                 <div class="lead-main">
                     <div class="lead-top-row">
-                        <span class="source-tag tag-${l.source}">${sourceLabels[l.source] || l.source}</span>
-                        <h4 class="lead-title">${l.business_name}</h4>
+                        <span class="source-tag tag-${sourceTag}">${esc(sourceLabels[l.source] || l.source)}</span>
+                        <h4 class="lead-title">${esc(l.business_name)}</h4>
+                        ${l.category ? `<span class="contact-item" style="font-size:0.8rem;opacity:0.8;">${esc(l.category)}</span>` : ''}
                         ${webHtml}
-                        <span class="status-badge status-${l.status}">${l.status}</span>
+                        <span class="status-badge status-${statusTag}">${esc(l.status)}</span>
                     </div>
 
                     <div class="lead-pains">
@@ -147,34 +205,34 @@ document.addEventListener("DOMContentLoaded", () => {
                     </div>
 
                     <div class="lead-contact-strip">
-                        <span class="contact-item"><i data-lucide="map-pin" style="width:14px;height:14px"></i> ${l.location || 'Global'}</span>
-                        ${l.email ? `<a href="mailto:${l.email}" class="contact-item" style="color:inherit;text-decoration:none;"><i data-lucide="mail" style="width:14px;height:14px"></i> ${l.email}</a>` : ''}
+                        <span class="contact-item"><i data-lucide="map-pin" style="width:14px;height:14px"></i> ${esc(l.location || 'Global')}</span>
+                        ${l.email ? `<a href="mailto:${esc(l.email)}" class="contact-item" style="color:inherit;text-decoration:none;"><i data-lucide="mail" style="width:14px;height:14px"></i> ${esc(l.email)}</a>` : ''}
                         ${l.phone ? `
                             <span class="contact-item" style="color:var(--cyan);font-weight:600;display:inline-flex;align-items:center;gap:4px;">
-                                <a href="tel:${l.phone.replace(/[^0-9+]/g, '')}" title="Click to dial in CallHippo" style="color:inherit;text-decoration:none;">
-                                    <i data-lucide="phone-call" style="width:14px;height:14px"></i> ${l.phone}
+                                <a href="tel:${phoneDigits}" title="Click to dial in CallHippo" style="color:inherit;text-decoration:none;">
+                                    <i data-lucide="phone-call" style="width:14px;height:14px"></i> ${esc(l.phone)}
                                 </a>
-                                <button class="btn-copy-mini" title="Copy clean 10-digit number for CallHippo" onclick="navigator.clipboard.writeText('${l.phone.replace(/[^0-9]/g, '').slice(-10)}'); this.innerText='✓'; setTimeout(()=>this.innerText='⧉', 1500);" style="background:transparent;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:0 2px;">⧉</button>
+                                <button class="btn-copy-mini copy-phone-btn" title="Copy number for CallHippo" style="background:transparent;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:0 2px;">⧉</button>
                             </span>
                         ` : ''}
-                        <span class="contact-item" style="color:var(--emerald);font-weight:600;"><i data-lucide="dollar-sign" style="width:14px;height:14px"></i> ${l.budget_estimate || 'Active Budget'}</span>
+                        <span class="contact-item" style="color:var(--emerald);font-weight:600;"><i data-lucide="dollar-sign" style="width:14px;height:14px"></i> ${esc(l.budget_estimate || 'Unknown')}</span>
                     </div>
                 </div>
 
                 <div class="lead-actions" style="display:flex; flex-direction:column; gap:8px;">
-                    <button class="btn btn-primary view-pitch-btn" data-id="${l.id}">
+                    <button class="btn btn-primary view-pitch-btn">
                         <i data-lucide="sparkles" style="width:16px;height:16px"></i>
                         <span>AI Pitch & Details</span>
                     </button>
                     <div style="display:flex; gap:6px;">
-                        ${(l.whatsapp || l.phone) ? `
-                            <a href="https://wa.me/${(l.whatsapp || l.phone).replace(/[^0-9]/g, '')}?text=${encodeURIComponent(l.ai_pitch || 'Hi ' + l.business_name)}" 
-                               target="_blank" class="btn btn-whatsapp" style="flex:1; justify-content:center; padding:8px 10px; font-size:0.8rem; text-decoration:none;">
+                        ${waDigits ? `
+                            <a href="https://wa.me/${waDigits}?text=${encodeURIComponent(l.ai_pitch || 'Hi ' + l.business_name)}"
+                               target="_blank" rel="noopener noreferrer" class="btn btn-whatsapp" style="flex:1; justify-content:center; padding:8px 10px; font-size:0.8rem; text-decoration:none;">
                                 <i data-lucide="message-circle" style="width:14px;height:14px"></i> WhatsApp
                             </a>
                         ` : ''}
                         ${l.email ? `
-                            <a href="mailto:${l.email}?subject=${encodeURIComponent('Quick question regarding ' + l.business_name)}&body=${encodeURIComponent(l.ai_pitch || '')}" 
+                            <a href="mailto:${esc(l.email)}?subject=${encodeURIComponent('Quick question regarding ' + l.business_name)}&body=${encodeURIComponent(l.ai_pitch || '')}"
                                class="btn btn-outline" style="flex:1; justify-content:center; padding:8px 10px; font-size:0.8rem; text-decoration:none;">
                                 <i data-lucide="mail" style="width:14px;height:14px"></i> Email
                             </a>
@@ -183,9 +241,19 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
             `;
 
-            // Attach event
+            // Attach events
             const btn = card.querySelector(".view-pitch-btn");
             btn.addEventListener("click", () => openPitchModal(l));
+            const copyBtn = card.querySelector(".copy-phone-btn");
+            if (copyBtn) {
+                copyBtn.addEventListener("click", () => {
+                    // US/CA: 10-digit national number; other countries: full international digits
+                    const digits = phoneDigits.replace(/\D/g, "");
+                    navigator.clipboard.writeText(digits.startsWith("1") && digits.length === 11 ? digits.slice(1) : digits);
+                    copyBtn.innerText = "✓";
+                    setTimeout(() => copyBtn.innerText = "⧉", 1500);
+                });
+            }
 
             leadsList.appendChild(card);
         });
@@ -202,8 +270,8 @@ document.addEventListener("DOMContentLoaded", () => {
         modalAuditScore.textContent = `Audit Score: ${lead.audit_score}/100`;
 
         modalPainPoints.innerHTML = (lead.pain_points || [])
-            .map(p => `<li>${p}</li>`)
-            .join("");
+            .map(p => `<li>${esc(p)}</li>`)
+            .join("") + (lead.audit_summary ? `<li style="opacity:0.7;list-style:none;margin-top:6px;">${esc(lead.audit_summary)}</li>` : "");
 
         modalPitchText.value = lead.ai_pitch || "Generating customized pitch...";
 
@@ -213,7 +281,8 @@ document.addEventListener("DOMContentLoaded", () => {
         modalEmailBtn.href = `mailto:${lead.email || ''}?subject=${subject}&body=${body}`;
 
         // Setup WhatsApp link
-        let cleanPhone = (lead.whatsapp || lead.phone || "").replace(/[^0-9]/g, "");
+        // Only numbers confirmed as mobile / published WhatsApp - landlines can't receive WhatsApp
+        let cleanPhone = (lead.whatsapp || "").replace(/[^0-9]/g, "");
         if (cleanPhone) {
             modalWhatsAppBtn.style.display = "inline-flex";
             modalWhatsAppBtn.href = `https://wa.me/${cleanPhone}?text=${body}`;
@@ -279,7 +348,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const niche = document.getElementById("nicheInput").value;
-        const country = document.getElementById("countryInput").value;
+        const country = countryInput.value;
+        const region = regionInput.value;
         const limit = parseInt(volumeSlider.value);
         const apiKey = document.getElementById("apiKeyInput").value;
 
@@ -288,7 +358,7 @@ document.addEventListener("DOMContentLoaded", () => {
         startScanBtn.innerHTML = `<i data-lucide="loader-2" class="spin"></i> <span>Autonomous Scanning Active...</span>`;
         lucide.createIcons();
 
-        addLog(`Initiating multi-channel scan for [${niche}] in [${country}]...`, "info");
+        addLog(`Initiating multi-channel scan for [${niche}] in [${country}${region !== "all" ? " / " + region : ""}]...`, "info");
         addLog(`Targeting channels: ${checkedSources.join(", ")}`, "normal");
 
         const progressMsgs = [
@@ -342,6 +412,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     sources: checkedSources,
                     niche: niche,
                     country: country,
+                    region: region,
                     limit: limit,
                     gemini_api_key: apiKey
                 }),
@@ -354,12 +425,17 @@ document.addEventListener("DOMContentLoaded", () => {
             if (timeRemainingSpan) timeRemainingSpan.textContent = "Done!";
 
             if (data.success) {
-                addLog(`Success! Extracted and verified ${data.harvested_count} fresh authentic leads.`, "success");
-                
+                addLog(`Success! ${data.harvested_count} new leads added.`, data.harvested_count ? "success" : "warn");
+                if (data.message) addLog(data.message, "warn");
+
                 // Sync filter with scanned country
                 if (searchInput) searchInput.value = "";
                 if (filterSource) filterSource.value = "all";
                 if (filterCountry) filterCountry.value = (country || "ALL").toUpperCase() === "ALL" ? "all" : country.toUpperCase();
+                if (filterRegion) {
+                    fillRegionSelect(filterRegion, filterCountry.value, "All States");
+                    filterRegion.value = "all";
+                }
                 if (filterService) filterService.value = "all";
                 if (filterStatus) filterStatus.value = "all";
 
@@ -404,7 +480,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     filterSource.addEventListener("change", fetchLeads);
-    if (filterCountry) filterCountry.addEventListener("change", fetchLeads);
+    if (filterCountry) filterCountry.addEventListener("change", () => {
+        fillRegionSelect(filterRegion, filterCountry.value, "All States");
+        fetchLeads();
+    });
+    if (filterRegion) filterRegion.addEventListener("change", fetchLeads);
     filterService.addEventListener("change", fetchLeads);
     filterStatus.addEventListener("change", fetchLeads);
 
@@ -424,6 +504,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Initial Fetch
+    loadRegions();
     fetchLeads();
     fetchStats();
 });

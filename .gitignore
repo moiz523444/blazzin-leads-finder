@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 *.pyd
 .env
+leads.db
+leads.db-journal
 .pytest_cache/
 scratch_*.py
 *.log

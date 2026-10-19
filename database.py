@@ -4,15 +4,20 @@ import csv
 import io
 import threading
 from typing import List, Dict, Any, Optional
+
+import config
 from models import Lead
 
-# Pure In-Memory Ephemeral RAM Database (0 Bytes on Disk - Fresh scan every time!)
+# On-disk SQLite: leads, contacted status and de-duplication survive restarts and new scans
 _lock = threading.Lock()
-_conn = sqlite3.connect(":memory:", check_same_thread=False)
+_conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
 _conn.row_factory = sqlite3.Row
 
+# Columns added after the first release - created on old databases by init_db()
+_NEW_COLUMNS = {"country": "TEXT DEFAULT ''", "region": "TEXT DEFAULT ''", "category": "TEXT DEFAULT ''"}
+
+
 def init_db():
-    """Initializes in-memory tables. Stored purely in RAM."""
     with _lock:
         cursor = _conn.cursor()
         cursor.execute("""
@@ -40,16 +45,20 @@ def init_db():
             UNIQUE(business_name, phone, website)
         )
         """)
+        existing = {row["name"] for row in cursor.execute("PRAGMA table_info(leads)")}
+        for col, ddl in _NEW_COLUMNS.items():
+            if col not in existing:
+                cursor.execute(f"ALTER TABLE leads ADD COLUMN {col} {ddl}")
         _conn.commit()
+
 
 def get_existing_signatures() -> set:
     """Returns set of all existing phone numbers, websites, and business names to prevent duplicates across scans."""
     with _lock:
         cursor = _conn.cursor()
         cursor.execute("SELECT business_name, phone, website FROM leads")
-        rows = cursor.fetchall()
         sigs = set()
-        for r in rows:
+        for r in cursor.fetchall():
             if r["phone"]:
                 sigs.add(r["phone"].strip())
             if r["website"]:
@@ -58,25 +67,29 @@ def get_existing_signatures() -> set:
                 sigs.add(r["business_name"].strip().lower())
         return sigs
 
+
 def save_lead(lead: Lead) -> Optional[int]:
-    """Saves lead into RAM with deduplication."""
+    """Saves a lead with deduplication."""
     with _lock:
         cursor = _conn.cursor()
         try:
             cursor.execute("""
             INSERT OR IGNORE INTO leads (
-                business_name, source, service_needed, website, has_website,
-                location, email, phone, whatsapp, contact_name, social_links,
+                business_name, source, service_needed, category, website, has_website,
+                location, country, region, email, phone, whatsapp, contact_name, social_links,
                 pain_points, intent_level, budget_estimate, audit_score,
                 audit_summary, ai_pitch, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 lead.business_name,
                 lead.source,
                 lead.service_needed,
+                lead.category or "",
                 lead.website or "",
                 1 if lead.has_website else 0,
                 lead.location or "Global",
+                (lead.country or "").upper(),
+                lead.region or "",
                 lead.email or "",
                 lead.phone or "",
                 lead.whatsapp or "",
@@ -100,22 +113,27 @@ def save_lead(lead: Lead) -> Optional[int]:
                 return row["id"] if row else None
             return cursor.lastrowid
         except Exception as e:
-            print(f"In-memory DB error: {e}")
+            print(f"DB error: {e}")
             return None
 
-def get_leads(source: Optional[str] = None, country: Optional[str] = None, service: Optional[str] = None, status: Optional[str] = None, search: Optional[str] = None, limit: int = 200) -> List[Dict[str, Any]]:
-    """Retrieves leads from RAM with active filtering."""
+
+def get_leads(source: Optional[str] = None, country: Optional[str] = None, service: Optional[str] = None,
+              status: Optional[str] = None, search: Optional[str] = None, region: Optional[str] = None,
+              limit: int = 200) -> List[Dict[str, Any]]:
     with _lock:
         cursor = _conn.cursor()
         query = "SELECT * FROM leads WHERE 1=1"
         params = []
-        
+
         if source and source != "all":
             query += " AND source = ?"
             params.append(source)
         if country and country != "all":
-            query += " AND (location LIKE ? OR location LIKE ?)"
-            params.extend([f"%, {country}%", f"%{country}%"])
+            query += " AND country = ?"
+            params.append(country.upper())
+        if region and region != "all":
+            query += " AND region = ?"
+            params.append(region)
         if service and service != "all":
             query += " AND service_needed = ?"
             params.append(service)
@@ -123,17 +141,16 @@ def get_leads(source: Optional[str] = None, country: Optional[str] = None, servi
             query += " AND status = ?"
             params.append(status)
         if search:
-            query += " AND (business_name LIKE ? OR website LIKE ? OR location LIKE ? OR pain_points LIKE ?)"
+            query += " AND (business_name LIKE ? OR website LIKE ? OR location LIKE ? OR pain_points LIKE ? OR category LIKE ?)"
             s = f"%{search}%"
-            params.extend([s, s, s, s])
-            
+            params.extend([s, s, s, s, s])
+
         query += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
-        
+
         cursor.execute(query, params)
-        rows = cursor.fetchall()
         leads = []
-        for row in rows:
+        for row in cursor.fetchall():
             item = dict(row)
             try:
                 item["social_links"] = json.loads(item["social_links"]) if item["social_links"] else {}
@@ -146,34 +163,37 @@ def get_leads(source: Optional[str] = None, country: Optional[str] = None, servi
             leads.append(item)
         return leads
 
+
 def update_lead_status(lead_id: int, status: str):
-    """Updates lead contact status in RAM."""
     with _lock:
         cursor = _conn.cursor()
         cursor.execute("UPDATE leads SET status = ? WHERE id = ?", (status, lead_id))
         _conn.commit()
 
+
 def get_stats() -> Dict[str, Any]:
-    """Calculates real-time stats directly from RAM."""
     with _lock:
         cursor = _conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM leads")
         total = cursor.fetchone()[0]
-        
-        cursor.execute("SELECT COUNT(*) FROM leads WHERE intent_level IN ('High', 'Extreme')")
+
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE intent_level IN ('High', 'Extreme', 'First-Mover')")
         high_intent = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(*) FROM leads WHERE has_website = 0")
         no_website = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'contacted'")
         contacted = cursor.fetchone()[0]
-        
+
         cursor.execute("SELECT source, COUNT(*) as count FROM leads GROUP BY source")
         source_counts = {row["source"]: row["count"] for row in cursor.fetchall()}
-        
+
         cursor.execute("SELECT service_needed, COUNT(*) as count FROM leads GROUP BY service_needed")
         service_counts = {row["service_needed"]: row["count"] for row in cursor.fetchall()}
+
+        cursor.execute("SELECT country, COUNT(*) as count FROM leads GROUP BY country")
+        country_counts = {row["country"] or "?": row["count"] for row in cursor.fetchall()}
 
         return {
             "total_leads": total,
@@ -181,28 +201,32 @@ def get_stats() -> Dict[str, Any]:
             "no_website_leads": no_website,
             "contacted_leads": contacted,
             "by_source": source_counts,
-            "by_service": service_counts
+            "by_service": service_counts,
+            "by_country": country_counts,
         }
 
+
 def export_leads_csv() -> str:
-    """Streams CSV directly from RAM without touching disk."""
-    leads = get_leads(limit=5000)
+    leads = get_leads(limit=100000)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "ID", "Business Name", "Source", "Service Needed", "Website", "Has Website",
-        "Location", "Email", "Phone", "WhatsApp", "Pain Points", "Intent Level",
-        "Budget Estimate", "Audit Score", "AI Pitch", "Status", "Created At"
+        "ID", "Business Name", "Category", "Source", "Service Needed", "Website", "Has Website",
+        "Location", "Country", "Region", "Email", "Phone", "WhatsApp", "Pain Points", "Intent Level",
+        "Budget Estimate", "Audit Score", "Audit Summary", "AI Pitch", "Status", "Created At"
     ])
     for l in leads:
         writer.writerow([
             l.get("id"),
             l.get("business_name"),
+            l.get("category"),
             l.get("source"),
             l.get("service_needed"),
             l.get("website"),
             "Yes" if l.get("has_website") else "No",
             l.get("location"),
+            l.get("country"),
+            l.get("region"),
             l.get("email"),
             l.get("phone"),
             l.get("whatsapp"),
@@ -210,14 +234,15 @@ def export_leads_csv() -> str:
             l.get("intent_level"),
             l.get("budget_estimate"),
             l.get("audit_score"),
+            l.get("audit_summary"),
             l.get("ai_pitch"),
             l.get("status"),
             l.get("created_at")
         ])
     return output.getvalue()
 
+
 def clear_all_leads():
-    """Wipes in-memory leads cleanly."""
     with _lock:
         cursor = _conn.cursor()
         cursor.execute("DELETE FROM leads")

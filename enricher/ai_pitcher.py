@@ -15,6 +15,8 @@ async def generate_pitch(lead: Lead, gemini_api_key: Optional[str] = None) -> st
             personalized cold outreach email (under 120 words) for this prospective client:
             
             Business Name: {lead.business_name}
+            Business Type: {lead.category or 'unknown'}
+            Location: {lead.location}
             Lead Source: {lead.source}
             Service: {lead.service_needed}
             Website: {lead.website}
@@ -50,11 +52,12 @@ async def generate_pitch(lead: Lead, gemini_api_key: Optional[str] = None) -> st
     
     if not lead.has_website:
         # PITCH FOR ZERO-WEBSITE BUSINESSES (HOT LEADS)
+        what = (lead.category or "a business like yours").lower()
         pitch = f"""Hi {b_name} team,
 
-I was looking for your business in {lead.location} and noticed you don't have an official website or digital storefront yet.
+I was looking for your business in {lead.location} and couldn't find a website for you - only your listing.
 
-Over 70% of potential customers looking for {lead.service_needed.replace('_', ' ')} check a website or portfolio before they call or book. Without one, valuable clients are going straight to competitors.
+Most people looking for {what} compare websites before they call or book, so without one a lot of those customers end up with competitors who have one.
 
 We design high-converting, mobile-first websites with direct WhatsApp ordering and automated booking systems, ready to launch in 5-7 days.
 
@@ -97,15 +100,15 @@ Mobile Engineering Team"""
         # HIGH-CONVERTING PITCH FOR WEBSITE TECH REVAMP
         pitch = f"""Hi {b_name} Leadership Team,
 
-I visited your website and ran a technical performance and mobile security diagnostic on it.
+I visited your website and ran a quick technical check on it.
 
-A severe issue immediately showed up: {primary_pain}.
+One thing stood out: {primary_pain}.
 
-When potential clients visit your site from their phones and experience this, over 50% immediately bounce and hire your direct competitors instead. For an active business in {lead.location}, this is quietly costing you tens of thousands of dollars in lost bookings every month.
+Most visitors now arrive from their phones, and issues like this make it more likely they leave and contact someone else.
 
-We engineer high-converting Next.js / modern web systems with sub-second mobile speeds, bank-grade SSL, and automated 1-click WhatsApp booking systems.
+We build fast, mobile-first websites with secure HTTPS and one-tap call / WhatsApp booking, and can fix or rebuild your site quickly.
 
-I've put together a quick 90-second video teardown showing the exact fixes you need. Mind if I send the link over to you here?
+Would it help if I sent a short video showing exactly what I found and how to fix it?
 
 Best regards,
 Agency Technical Director"""

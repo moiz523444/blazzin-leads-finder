@@ -86,30 +86,30 @@ async def harvest_zero_website_leads(niche: str = "dental", country: str = "UAE"
             for city in selected_cities:
                 selected_ind = random.choice(shuffled_industries)
                 if ck in ("US", "CA"):
-                    queries.append((ck, prefix, city, f'facebook {selected_ind} {city} call'))
-                    queries.append((ck, prefix, city, f'{selected_ind} {city} phone contact'))
+                    queries.append((ck, prefix, city, selected_ind, f'facebook {selected_ind} {city} call'))
+                    queries.append((ck, prefix, city, selected_ind, f'{selected_ind} {city} phone contact'))
                 else:
-                    queries.append((ck, prefix, city, f'facebook {selected_ind} {city} {prefix}'))
-                    queries.append((ck, prefix, city, f'{selected_ind} {city} {prefix} whatsapp'))
+                    queries.append((ck, prefix, city, selected_ind, f'facebook {selected_ind} {city} {prefix}'))
+                    queries.append((ck, prefix, city, selected_ind, f'{selected_ind} {city} {prefix} whatsapp'))
     else:
         prefix, cities = COUNTRY_PHONE_PREFIXES.get(country_key, ("+1", ["New York"]))
         selected_cities = random.sample(cities, min(3, len(cities)))
         for city in selected_cities:
             selected_ind = random.choice(shuffled_industries)
             if country_key in ("US", "CA"):
-                queries.append((country_key, prefix, city, f'facebook {selected_ind} {city} call'))
-                queries.append((country_key, prefix, city, f'{selected_ind} {city} phone contact'))
+                queries.append((country_key, prefix, city, selected_ind, f'facebook {selected_ind} {city} call'))
+                queries.append((country_key, prefix, city, selected_ind, f'{selected_ind} {city} phone contact'))
             else:
-                queries.append((country_key, prefix, city, f'facebook {selected_ind} {city} {prefix}'))
-                queries.append((country_key, prefix, city, f'{selected_ind} {city} {prefix} whatsapp'))
+                queries.append((country_key, prefix, city, selected_ind, f'facebook {selected_ind} {city} {prefix}'))
+                queries.append((country_key, prefix, city, selected_ind, f'{selected_ind} {city} {prefix} whatsapp'))
 
     random.shuffle(queries)
     active_queries = queries[:4]
 
-    search_tasks = [ddg_search(q) for _, _, _, q in active_queries]
+    search_tasks = [ddg_search(q) for _, _, _, _, q in active_queries]
     all_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-    for (ck, prefix, city, q), query_res in zip(active_queries, all_results_list):
+    for (ck, prefix, city, selected_ind, q), query_res in zip(active_queries, all_results_list):
         if len(leads) >= limit:
             break
         if not isinstance(query_res, list):
@@ -120,7 +120,12 @@ async def harvest_zero_website_leads(niche: str = "dental", country: str = "UAE"
             title = r.get("title", "")
             snippet = r.get("snippet", "")
             url = r.get("url", "")
-            combined_text = f"{title} {snippet} {url}"
+            # A result on the business's own domain means it HAS a website - not a zero-website lead
+            host = urllib.parse.urlparse(url).netloc.lower()
+            if not any(s in host for s in ("facebook.com", "instagram.com", "yelp.", "yellowpages", "tiktok.com", "linktr.ee")):
+                continue
+            # URL digits (Facebook/listing IDs) are not phone numbers - only read title + snippet
+            combined_text = f"{title} {snippet}"
 
             # Extract phone and email
             phone = extract_phone_from_text(combined_text, default_prefix=prefix)
@@ -160,6 +165,7 @@ async def harvest_zero_website_leads(niche: str = "dental", country: str = "UAE"
                 website="",
                 has_website=False,
                 location=f"{city}, {ck}",
+                country=ck,
                 email=email,
                 phone=phone,
                 whatsapp=whatsapp,
@@ -178,69 +184,6 @@ async def harvest_zero_website_leads(niche: str = "dental", country: str = "UAE"
             )
             leads.append(lead)
 
-    # High-Reliability Fallback: Discover businesses currently operating without dedicated websites
-    if len(leads) < limit:
-        c_code_map = {"US": "us", "UK": "gb", "CA": "ca", "UAE": "ae", "QA": "qa"}
-        for ck in target_countries:
-            co = c_code_map.get(ck, "us")
-            target_term = phrase if phrase != "local business" else "service"
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(target_term)}&country={co}&entity=software&limit=25"
-            try:
-                async with httpx.AsyncClient(timeout=4.0) as cl:
-                    res = await cl.get(url)
-                    if res.status_code == 200:
-                        for it in res.json().get("results", []):
-                            u = it.get("sellerUrl") or ""
-                            # If they have no dedicated website or only an app store/social link, they NEED a website!
-                            seller = it.get("sellerName") or ""
-                            track = it.get("trackName") or ""
-                            if not seller:
-                                continue
-                            target_link = it.get("supportUrl") or it.get("sellerUrl") or ""
-                            if not target_link or "apple.com" in target_link or "youtu" in target_link:
-                                continue
-                            try:
-                                from enricher.contact_extractor import extract_contacts_from_url
-                                c = await extract_contacts_from_url(target_link)
-                                phone = c.get("phone") or ""
-                                whatsapp = c.get("whatsapp") or ""
-                                email = c.get("email") or ""
-                            except Exception:
-                                continue
-
-                            if phone or whatsapp or email:
-                                contact_key = f"{phone}:{whatsapp}:{email}"
-                                if contact_key in seen_contacts:
-                                    continue
-                                seen_contacts.add(contact_key)
-                                lead = Lead(
-                                    business_name=f"{seller} ({track[:25]})",
-                                    source="new_business",
-                                    service_needed="web_development",
-                                    website="",
-                                    has_website=False,
-                                    location=f"{ck}",
-                                    email=email,
-                                    phone=phone,
-                                    whatsapp=whatsapp,
-                                    social_links={"app_store": it.get("trackViewUrl", "")},
-                                    pain_points=[
-                                        "Zero official web storefront — Operates purely on mobile app without desktop booking",
-                                        "Missing organic Google ranking — Losing 70%+ of local desktop search customers",
-                                        "No automated web funnel to capture client inquiries or service orders"
-                                    ],
-                                    intent_level="First-Mover",
-                                    budget_estimate="$2,000 - $4,500",
-                                    audit_score=15,
-                                    audit_summary="Operational business with mobile footprint but completely missing official web presence.",
-                                    ai_pitch=f"Hi {seller} team,\n\nI came across your app '{track}' and noticed your business doesn't have an official web landing page yet. Over 65% of clients looking for services search on Google desktop before downloading an app or calling. We build high-speed conversion web systems that connect to your workflow. Would you like a quick mockup?",
-                                    status="new"
-                                )
-                                leads.append(lead)
-                                if len(leads) >= limit:
-                                    break
-            except Exception:
-                pass
-
+    # No App Store "fallback": those were app developers WITH websites, wrongly pitched as having none
     return leads
 

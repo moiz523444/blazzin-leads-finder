@@ -69,40 +69,13 @@ async def harvest_ecom_stores(niche: str = "ecommerce", country: str = "US", lim
             raw_targets.append({
                 "name": clean_name[:60],
                 "url": f"{p.scheme}://{p.netloc}/",
-                "location": f"{primary_city}, {ck}"
+                "location": f"{primary_city}, {ck}",
+                "country": ck,
             })
             if len(raw_targets) >= limit * 2:
                 break
 
-    # High-Reliability Fallback: Query live shopping store registry for authentic DTC brands with real websites
-    if len(raw_targets) < limit:
-        c_code_map = {"US": "us", "UK": "gb", "CA": "ca", "UAE": "ae", "QA": "qa"}
-        for ck in target_countries:
-            co = c_code_map.get(ck, "us")
-            target_term = phrase if phrase != "ecommerce" else "boutique"
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(target_term)}+shopping&country={co}&entity=software&limit=15"
-            try:
-                async with httpx.AsyncClient(timeout=4.0) as cl:
-                    res = await cl.get(url)
-                    if res.status_code == 200:
-                        for it in res.json().get("results", []):
-                            u = it.get("sellerUrl") or ""
-                            brand = it.get("sellerName") or it.get("trackName")
-                            if not u or "apple.com" in u or "youtu" in u or any(bad in u.lower() for bad in ["amazon.", "ebay.", "walmart."]):
-                                continue
-                            dom = urllib.parse.urlparse(u).netloc.lower()
-                            if dom in seen_domains:
-                                continue
-                            seen_domains.add(dom)
-                            raw_targets.append({
-                                "name": brand[:60],
-                                "url": u,
-                                "location": f"{ck}"
-                            })
-                            if len(raw_targets) >= limit * 2:
-                                break
-            except Exception:
-                pass
+    # No App Store "fallback": app developers are not online stores and made leads look fake
 
     async def process_store(item: Dict[str, str]) -> Lead:
         b_name = item["name"]
@@ -110,11 +83,12 @@ async def harvest_ecom_stores(niche: str = "ecommerce", country: str = "US", lim
         loc = item["location"]
 
         audit_task = audit_website(target_url)
-        contact_task = extract_contacts_from_url(target_url)
+        contact_task = extract_contacts_from_url(target_url, default_country=item["country"])
         audit_res, contacts = await asyncio.gather(audit_task, contact_task, return_exceptions=True)
 
-        if isinstance(audit_res, Exception):
-            audit_res = {"audit_score": 45, "pain_points": ["Slow checkout and response latency"], "summary": "E-Com audit completed."}
+        # Only stores with problems we actually observed are leads
+        if isinstance(audit_res, Exception) or not audit_res.get("needs_work"):
+            return None
         if isinstance(contacts, Exception):
             contacts = {"email": "", "phone": "", "whatsapp": "", "social_links": {}, "site_name": ""}
 
@@ -131,7 +105,6 @@ async def harvest_ecom_stores(niche: str = "ecommerce", country: str = "US", lim
 
         audit_score = audit_res.get("audit_score", 45)
         pain_points = list(audit_res.get("pain_points", []))
-        pain_points.append("High mobile bounce rate — checkout optimization needed")
 
         return Lead(
             business_name=b_name,
@@ -140,6 +113,7 @@ async def harvest_ecom_stores(niche: str = "ecommerce", country: str = "US", lim
             website=target_url,
             has_website=True,
             location=loc,
+            country=item["country"],
             email=email,
             phone=phone,
             whatsapp=whatsapp,

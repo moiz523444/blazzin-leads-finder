@@ -30,24 +30,34 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
     target_term = phrase if phrase != "local business" else "business"
 
     import random
-    cities_pool = ["New York", "London", "Toronto", "Dubai", "Los Angeles", "Chicago", "Miami", "Manchester", "Vancouver"]
-    sample_cities = random.sample(cities_pool, 3)
+    country_cities = {
+        "US": ["New York", "Los Angeles", "Chicago", "Miami", "Houston", "Dallas"],
+        "UK": ["London", "Manchester", "Birmingham", "Leeds"],
+        "CA": ["Toronto", "Vancouver", "Calgary", "Montreal"],
+        "UAE": ["Dubai", "Abu Dhabi", "Sharjah"],
+        "QA": ["Doha", "Lusail"],
+    }
+    pool = [(ck, c) for ck, cs in country_cities.items() for c in cs] if country_up == "ALL" \
+        else [(country_up, c) for c in country_cities.get(country_up, ["New York"])]
+    picks = [random.choice(pool) for _ in range(3)]
 
+    # (query, platform label, platform key, country code, city shown as location)
     queries = [
-        (f'facebook {target_term} {sample_cities[0]} call', "Facebook", "facebook"),
-        (f'facebook {target_term} {sample_cities[1]} phone', "Facebook", "facebook"),
-        (f'facebook {target_term} {sample_cities[2]} whatsapp', "Facebook", "facebook"),
-        (f'reddit hiring {target_term} developer', "Reddit", "reddit"),
+        (f'facebook {target_term} {picks[0][1]} call', "Facebook", "facebook", picks[0][0], picks[0][1]),
+        (f'facebook {target_term} {picks[1][1]} phone', "Facebook", "facebook", picks[1][0], picks[1][1]),
+        (f'facebook {target_term} {picks[2][1]} whatsapp', "Facebook", "facebook", picks[2][0], picks[2][1]),
+        (f'reddit hiring {target_term} developer', "Reddit", "reddit", "" if country_up == "ALL" else country_up, "Online"),
     ]
     random.shuffle(queries)
 
     leads = []
     seen = set()
 
-    search_tasks = [ddg_search(q) for q, _, _ in queries]
+    search_tasks = [ddg_search(q[0]) for q in queries]
     all_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-    for (q, platform_label, p_key), query_res in zip(queries, all_results_list):
+    for (q, platform_label, p_key, q_country, q_city), query_res in zip(queries, all_results_list):
+        def_prefix = COUNTRY_GEO.get(q_country or "US", COUNTRY_GEO["US"])[2]
         if len(leads) >= limit:
             break
         if not isinstance(query_res, list):
@@ -74,7 +84,7 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
             from harvester.zero_website import extract_phone_from_text
             extracted_ph = extract_phone_from_text(text_without_url, default_prefix=def_prefix)
             if extracted_ph:
-                fmt_p, wa_d = format_phone_international(extracted_ph, default_country=country_up)
+                fmt_p, wa_d = format_phone_international(extracted_ph, default_country=q_country or "US")
                 if fmt_p:
                     phone = fmt_p
                     whatsapp = wa_d
@@ -83,7 +93,7 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
             if "wa.me/" in text_without_url or "whatsapp" in text_without_url.lower():
                 wa_m = re.search(r'(?:wa\.me/|whatsapp[^\d]*)([0-9+]{8,16})', text_without_url, re.I)
                 if wa_m:
-                    fmt_w, wa_d = format_phone_international(wa_m.group(1), default_country=country_up)
+                    fmt_w, wa_d = format_phone_international(wa_m.group(1), default_country=q_country or "US")
                     if wa_d:
                         whatsapp = wa_d
                         if not phone and fmt_w:
@@ -114,7 +124,8 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
                 service_needed="web_development" if "web" in phrase or "site" in phrase else "software_services",
                 website=url if "http" in url else "",
                 has_website=False if any(d in url for d in ["instagram.com", "facebook.com"]) else True,
-                location=f"{main_city}, {country_up}",
+                location=f"{q_city}, {q_country}" if q_country else q_city,
+                country=q_country,
                 email=email,
                 phone=phone,
                 whatsapp=whatsapp,
@@ -128,63 +139,10 @@ async def harvest_social_leads(niche: str = "local business", country: str = "US
                 budget_estimate="$2,000 - $6,000",
                 audit_score=45,
                 audit_summary=f"Active opportunity discovered across {platform_label}. Profile actively fielding inquiries.",
-                ai_pitch=f"Hi {b_name} team,\n\nI came across your active profile on {platform_label} regarding your {phrase} services in {main_city}. We specialize in building automated client booking systems and fast web portals that convert social traffic into paid clients. Would you be open to a quick 2-minute demo of how we can help?",
+                ai_pitch=f"Hi {b_name} team,\n\nI came across your active profile on {platform_label} regarding your {phrase} services in {q_city}. We specialize in building automated client booking systems and fast web portals that convert social traffic into paid clients. Would you be open to a quick 2-minute demo of how we can help?",
                 status="new"
             ))
 
-    # High-Reliability Fallback: Discover active businesses with live social profiles
-    if len(leads) < limit:
-        c_code_map = {"US": "us", "UK": "gb", "CA": "ca", "UAE": "ae", "QA": "qa"}
-        co = c_code_map.get(country_up, "us")
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(target_term)}&country={co}&entity=software&limit=20"
-        try:
-            import httpx
-            from enricher.contact_extractor import extract_contacts_from_url
-            async with httpx.AsyncClient(timeout=4.0) as cl:
-                res = await cl.get(url)
-                if res.status_code == 200:
-                    for it in res.json().get("results", []):
-                        seller = it.get("sellerName") or ""
-                        web = it.get("sellerUrl") or ""
-                        if not web or "apple.com" in web or "youtu" in web:
-                            continue
-                        c = await extract_contacts_from_url(web)
-                        p = c.get("phone") or ""
-                        w = c.get("whatsapp") or ""
-                        e = c.get("email") or ""
-                        s_links = c.get("social_links") or {}
-                        if (p or w or e) and (s_links or web):
-                            uniq = p or w or e
-                            if uniq in seen:
-                                continue
-                            seen.add(uniq)
-                            leads.append(Lead(
-                                business_name=f"{seller}",
-                                source="social_media",
-                                service_needed="social_media",
-                                website=web,
-                                has_website=True,
-                                location=f"{main_city}, {country_up}",
-                                email=e,
-                                phone=p,
-                                whatsapp=w,
-                                social_links=s_links if s_links else {"profile": web},
-                                pain_points=[
-                                    "Underutilized social conversion funnel — Losing inbound customer traffic",
-                                    "No automated customer chat or instant WhatsApp booking on digital channels",
-                                    "Prime candidate for modern digital marketing and website funnel modernization"
-                                ],
-                                intent_level="High",
-                                budget_estimate="$2,500 - $6,500",
-                                audit_score=40,
-                                audit_summary=f"Operational brand with active digital presence in {country_up}. Direct contacts verified.",
-                                ai_pitch=f"Hi {seller} team,\n\nI was reviewing your online presence in {country_up} and noticed opportunities to boost customer bookings directly through your channels. We implement automated lead capture and instant WhatsApp booking funnels that lift conversions by 35%. Would you be open to seeing a 60-second video walkthrough?",
-                                status="new"
-                            ))
-                            if len(leads) >= limit:
-                                break
-        except Exception:
-            pass
-
+    # No App Store "fallback": app developers are not social-media leads
     return leads
 

@@ -49,17 +49,17 @@ async def search_live_organic_businesses(niche: str, country: str, limit: int = 
         selected_cities = random.sample(cities, min(2, len(cities)))
         for selected_city in selected_cities:
             selected_phrase = random.choice(shuffled_phrases)
-            queries.append((f"{selected_phrase} {selected_city} {c_name} phone", f"{selected_city}, {c_name}"))
-            queries.append((f"{selected_phrase} in {selected_city} contact", f"{selected_city}, {c_name}"))
+            queries.append((f"{selected_phrase} {selected_city} {c_name} phone", f"{selected_city}, {c_name}", ck))
+            queries.append((f"{selected_phrase} in {selected_city} contact", f"{selected_city}, {c_name}", ck))
 
     random.shuffle(queries)
 
 
     active_queries = queries[:4]
-    search_tasks = [ddg_search(q) for q, _ in active_queries]
+    search_tasks = [ddg_search(q) for q, _, _ in active_queries]
     all_results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-    for (q, loc), query_res in zip(active_queries, all_results_list):
+    for (q, loc, ck), query_res in zip(active_queries, all_results_list):
         if len(found) >= limit:
             break
         if not isinstance(query_res, list):
@@ -82,37 +82,8 @@ async def search_live_organic_businesses(niche: str, country: str, limit: int = 
 
             # Use site root - deep links are usually blog posts, not the business homepage
             p = urllib.parse.urlparse(real_url)
-            found.append({"name": clean_name[:60], "url": f"{p.scheme}://{p.netloc}/", "location": loc})
-    # High-Reliability Fallback: Query live service business registries for active operational companies
-    if len(found) < limit:
-        c_code_map = {"US": "us", "UK": "gb", "CA": "ca", "UAE": "ae", "QA": "qa"}
-        for ck in target_countries:
-            co = c_code_map.get(ck, "us")
-            target_term = phrase if phrase != "local business" else "service"
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(target_term)}&country={co}&entity=software&limit=15"
-            try:
-                async with httpx.AsyncClient(timeout=4.0) as cl:
-                    res = await cl.get(url)
-                    if res.status_code == 200:
-                        for it in res.json().get("results", []):
-                            u = it.get("sellerUrl") or ""
-                            brand = it.get("sellerName") or it.get("trackName")
-                            if not u or "apple.com" in u or "youtu" in u or any(bad in u.lower() for bad in EXCLUDED_DOMAINS):
-                                continue
-                            dom = urllib.parse.urlparse(u).netloc.lower()
-                            if dom in seen_domains:
-                                continue
-                            seen_domains.add(dom)
-                            found.append({
-                                "name": brand[:60],
-                                "url": u,
-                                "location": f"{ck}"
-                            })
-                            if len(found) >= limit:
-                                break
-            except Exception:
-                pass
-
+            found.append({"name": clean_name[:60], "url": f"{p.scheme}://{p.netloc}/", "location": loc, "country": ck})
+    # No App Store "fallback": app developers are not local businesses and made leads look fake
     return found
 
 
@@ -133,11 +104,12 @@ async def harvest_meta_ads(niche: str = "dental", country: str = "US", limit: in
 
         # Run live audit and contact extraction concurrently
         audit_task = audit_website(target_url)
-        contact_task = extract_contacts_from_url(target_url)
+        contact_task = extract_contacts_from_url(target_url, default_country=item["country"])
         audit_res, contacts = await asyncio.gather(audit_task, contact_task, return_exceptions=True)
 
-        if isinstance(audit_res, Exception):
-            audit_res = {"audit_score": 40, "pain_points": ["Site response delayed"], "summary": "Audit completed."}
+        # Only sites with problems we actually observed are revamp leads
+        if isinstance(audit_res, Exception) or not audit_res.get("needs_work"):
+            return None
         if isinstance(contacts, Exception):
             contacts = {"email": "", "phone": "", "whatsapp": "", "social_links": {}, "site_name": ""}
 
@@ -169,11 +141,6 @@ async def harvest_meta_ads(niche: str = "dental", country: str = "US", limit: in
         # Prioritize businesses with actual technical revamp opportunities
         audit_score = audit_res.get("audit_score", 45)
         pain_points = list(audit_res.get("pain_points", []))
-        if not pain_points:
-            pain_points = [
-                "BROKEN ON MOBILE: Unoptimized layout causing high smartphone bounce rate",
-                "OUTDATED & SLOW: Legacy architecture losing valuable client bookings to modern competitors"
-            ]
 
         return Lead(
             business_name=b_name,
@@ -182,6 +149,7 @@ async def harvest_meta_ads(niche: str = "dental", country: str = "US", limit: in
             website=target_url,
             has_website=True,
             location=loc,
+            country=item["country"],
             email=email,
             phone=phone,
             whatsapp=whatsapp,
