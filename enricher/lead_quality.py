@@ -181,22 +181,43 @@ def _name_tokens(name: str) -> List[str]:
     return [t for t in toks if t not in _STOP and len(t) > 1]
 
 
+_BLOCKED = {401, 403, 429, 503}
+
+
 async def verify_company_domain(company_name: str, tlds: List[str]) -> str:
     """
     Tries candidate domains built from the company name and only returns one
     if it is live AND the page title/brand actually contains the company name.
     Returns "" when nothing can be verified (never returns a guess).
     """
+    url, _ = await find_company_domain(company_name, tlds)
+    return url
+
+
+async def find_company_domain(company_name: str, tlds: List[str]) -> Tuple[str, bool]:
+    """
+    Like verify_company_domain, but also reports whether some candidate domain is live yet
+    blocked our checker (bot protection). In that case "no website" can't be claimed truthfully.
+    Returns (verified_url or "", blocked_candidate_seen).
+    """
     toks = _name_tokens(company_name)
     if not toks:
-        return ""
+        return "", False
     slugs = list(dict.fromkeys(["".join(toks), "-".join(toks), toks[0] if len(toks[0]) >= 5 else ""]))
     candidates = [f"https://www.{s}{tld}" for s in slugs if s for tld in tlds]
+    blocked = []
 
     async def probe(url: str) -> str:
         try:
-            async with httpx.AsyncClient(timeout=6.0, follow_redirects=True, verify=False, headers=BROWSER_HEADERS) as c:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, verify=False, headers=BROWSER_HEADERS) as c:
                 r = await c.get(url)
+            if r.status_code in _BLOCKED:
+                # Some firewalls block full browser headers but allow a plain request
+                async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, verify=False) as c:
+                    r = await c.get(url)
+                if r.status_code in _BLOCKED:
+                    blocked.append(url)
+                    return ""
             if r.status_code >= 400:
                 return ""
             final = str(r.url)
@@ -218,5 +239,5 @@ async def verify_company_domain(company_name: str, tlds: List[str]) -> str:
     results = await asyncio.gather(*[probe(u) for u in candidates])
     for r in results:
         if r:
-            return r
-    return ""
+            return r, bool(blocked)
+    return "", bool(blocked)

@@ -228,6 +228,11 @@ async def audit_website(url: str) -> Dict[str, Any]:
             # Our local DNS is unreliable - only claim this when public DNS confirms the domain is gone
             host = httpx.URL(clean_url).host
             exists = await domain_exists(host)
+            if exists is False:
+                # www.example.com may be missing while example.com works (or the reverse) - audit the working one
+                alt = host[4:] if host.startswith("www.") else "www." + host
+                if await domain_exists(alt) is True:
+                    return await audit_website(f"https://{alt}/")
             if exists is not False:
                 return _inconclusive("could not connect, but the domain still resolves (likely our network)", cms)
             pain_points.append(f"The website address {host} does not exist in DNS - visitors get 'site can't be reached' (domain expired or misconfigured)")

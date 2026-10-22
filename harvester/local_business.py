@@ -26,16 +26,17 @@ from models import Lead
 from harvester.regions import pick_targets, ISO2, REGIONS
 from harvester.web_auditor import audit_website, our_internet_ok
 from enricher.contact_extractor import extract_contacts_from_url, phone_info, is_valid_email
-from enricher.lead_quality import verify_company_domain
+from enricher.lead_quality import find_company_domain
 
 # (keywords in the niche text, TomTom search phrase, OSM tag filters, display category)
 CATEGORIES = [
     (["dental", "dentist"], "dentist", [("amenity", "dentist")], "Dental clinic"),
     (["aesthetic", "beauty", "salon", "spa", "plastic"], "beauty salon", [("shop", "beauty|hairdresser|cosmetics"), ("leisure", "spa")], "Beauty & aesthetics"),
     (["medical", "clinic", "health", "doctor", "physio"], "medical clinic", [("amenity", "clinic|doctors"), ("healthcare", "clinic|doctor|physiotherapist")], "Medical clinic"),
-    (["real estate", "property", "properties", "realtor"], "real estate agency", [("office", "estate_agent")], "Real estate agency"),
-    (["law", "legal", "attorney", "lawyer"], "lawyer", [("office", "lawyer|notary")], "Law firm"),
-    (["accounting", "accountant", "tax", "bookkeep"], "accountant", [("office", "accountant|tax_advisor")], "Accounting firm"),
+    # "a|b" = several TomTom search phrases for categories where one phrase returns few listings
+    (["real estate", "property", "properties", "realtor"], "real estate agency|realtor", [("office", "estate_agent")], "Real estate agency"),
+    (["law", "legal", "attorney", "lawyer"], "lawyer|law firm|attorney", [("office", "lawyer|notary")], "Law firm"),
+    (["accounting", "accountant", "tax", "bookkeep"], "accountant|tax services", [("office", "accountant|tax_advisor")], "Accounting firm"),
     (["restaurant", "dining", "cafe", "food", "hospitality"], "restaurant", [("amenity", "restaurant|cafe")], "Restaurant / cafe"),
     (["hotel", "resort", "guest house"], "hotel", [("tourism", "hotel|guest_house|motel")], "Hotel"),
     (["fitness", "gym", "wellness", "yoga"], "gym", [("leisure", "fitness_centre|sports_centre")], "Gym / fitness"),
@@ -63,8 +64,14 @@ SOCIAL_HOSTS = ("facebook.com", "fb.com", "instagram.com", "linktr.ee", "tiktok.
                 # Google Business profile / maps short links - a listing, not the business's own website
                 "share.google", "g.page", "goo.gl", "maps.app.goo.gl", "google.com")
 # A listing that links to a sub-page like /locations/... belongs to a multi-branch company (chain)
-CHAIN_PATH = re.compile(r"/(locations?|stores?|branches|clinics|offices|pages|find-a-|salons?|studios?)\b", re.I)
-CHAIN_NAME = re.compile(r"\bfranchis", re.I)
+CHAIN_PATH = re.compile(r"/(locations?|stores?|branches|clinics|offices|pages|find-a-|salons?|studios?|team|agents?|our-people|doctors?)\b", re.I)
+# Franchises, hotel brands, public bodies and non-businesses are real but don't hire freelancers for a website
+CHAIN_NAME = re.compile(
+    r"\bfranchis|\bhospital\b|\buniversity\b|\bministry\b|\bgovernment\b|\bembassy\b|\bmunicipality\b|\bcouncil\b"
+    r"|\b(westin|marriott|sheraton|hilton|hyatt|radisson|rotana|m[eé]ridien|novotel|ibis|holiday inn|best western|"
+    r"ramada|crowne plaza|intercontinental|four seasons|ritz|courtyard|hampton inn|premier inn|travelodge)\b"
+    r"|wastewater|treatment plant|\bcondominium|\bholdings\b|highway operations|\b\d{2,4}\s*(am|fm)\b|\bradio\b",
+    re.I)
 
 OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -95,12 +102,21 @@ def _cat(c) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Provider 1: TomTom Search API
 # ---------------------------------------------------------------------------
+_tomtom_sem = asyncio.Semaphore(3)  # free keys are rate-limited (HTTP 429 when ~20 requests fire at once)
+
+
 async def tomtom_search(query: str, iso2: str, lat: float, lon: float, radius_m: int = 25000) -> List[Dict[str, Any]]:
     url = f"https://api.tomtom.com/search/2/poiSearch/{urllib.parse.quote(query)}.json"
     params = {"key": config.TOMTOM_API_KEY, "lat": lat, "lon": lon, "radius": radius_m,
               "limit": 100, "countrySet": iso2, "language": "en-GB"}
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        res = await client.get(url, params=params)
+    for attempt in range(4):
+        async with _tomtom_sem:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.get(url, params=params)
+            await asyncio.sleep(0.3)  # keep well under the per-second limit
+        if res.status_code != 429:
+            break
+        await asyncio.sleep(1.5 * (attempt + 1))
     if res.status_code != 200:
         raise RuntimeError(f"TomTom HTTP {res.status_code}: {res.text[:120]}")
     out = []
@@ -228,6 +244,43 @@ async def _site_mentions(url: str, phone_digits: str, town: str) -> bool:
     return False
 
 
+CATEGORY_WORDS = {
+    "Law firm": ["law", "legal", "lawyers"], "Dental clinic": ["dental", "dentistry", "smiles"],
+    "Auto repair / dealer": ["auto", "automotive", "autobody"], "Construction / trades": ["construction", "contracting", "ltd"],
+    "Real estate agency": ["realestate", "realty", "properties"], "Hotel": ["hotel", "inn"],
+    "Beauty & aesthetics": ["salon", "beauty", "spa"], "Accounting firm": ["cpa", "accounting", "tax"],
+    "Restaurant / cafe": ["restaurant", "cafe", "kitchen"], "Fashion store": ["boutique", "clothing", "shop"],
+    "Travel agency": ["travel", "tours"], "Car rental": ["rentacar", "carrental"], "Medical clinic": ["clinic", "medical"],
+    "Gym / fitness": ["fitness", "gym"], "Education / training": ["academy", "training"],
+}
+_NAME_STOP = {"the", "and", "of", "at", "by", "llc", "inc", "ltd", "co", "company", "corp", "limited", "plc", "group"}
+
+
+async def _find_variant_domain(name: str, town: str, category: str, tlds: List[str], phone_digits: str) -> str:
+    """Tries common short/variant domains and returns one only if its page shows this business's phone or town."""
+    from harvester.web_auditor import domain_exists
+    raw = [t for t in re.findall(r"[a-z0-9]+", name.lower()) if t not in _NAME_STOP]
+    if not raw:
+        return ""
+    town_slug = re.sub(r"[^a-z]", "", (town or "").lower())
+    slugs = {"".join(raw[:2]), raw[0] + town_slug, "".join(t[0] for t in raw) + town_slug}
+    for word in CATEGORY_WORDS.get(category, []):
+        slugs.update({raw[0] + word, "".join(raw[:2]) + word})
+    slugs = {s for s in slugs if len(s) >= 5 and s != "".join(raw)}  # exact name already tried
+    hosts = [f"{s}{tld}" for s in slugs for tld in tlds]
+
+    async def check(host):
+        if await domain_exists(host) is not True:
+            return ""
+        url = f"https://{host}"
+        return url if await _site_mentions(url, phone_digits, town) else ""
+
+    for r in await asyncio.gather(*(check(h) for h in hosts)):
+        if r:
+            return r
+    return ""
+
+
 def _norm_site(url: str) -> str:
     url = (url or "").strip()
     if not url:
@@ -259,9 +312,20 @@ async def _build_lead(biz: Dict[str, Any], country: str, region: str, city: str,
     verified_by_lookup = False
     if not website:
         tlds = COUNTRY_TLDS.get(country, [".com"])
-        # Second try because a single local-DNS failure would otherwise look like "no website"
-        found = await verify_company_domain(biz["name"], tlds) or await verify_company_domain(biz["name"], tlds)
-        if found:
+        # Second try because a single network failure would otherwise look like "no website"
+        found, blocked = await find_company_domain(biz["name"], tlds)
+        if not found:
+            found, blocked2 = await find_company_domain(biz["name"], tlds)
+            blocked = blocked or blocked2
+        if not found and blocked:
+            return None  # a site with its name exists but hides from checkers - can't claim "no website"
+        if not found:
+            # Many businesses use a short/variant domain (modeltown.ca for "Model Town Auto Service") -
+            # accept one only when the page carries this business's phone or town
+            found = await _find_variant_domain(biz["name"], biz.get("city") or city, category, tlds, digits)
+            if found:
+                website, verified_by_lookup = found, True
+        if found and not website:
             # A domain carrying the same name may belong to a different business. Only accept it if the
             # page mentions this business's phone or town; otherwise we can't say "no website" either -> skip.
             if not await _site_mentions(found, digits, biz.get("city") or city):
@@ -276,6 +340,13 @@ async def _build_lead(biz: Dict[str, Any], country: str, region: str, city: str,
         audit, contacts = await asyncio.gather(audit_website(website),
                                                extract_contacts_from_url(website, default_country=country),
                                                return_exceptions=True)
+        # A listing that links to a sub-page (e.g. /office-info/meet-dr-x) can 404 while the site itself is fine -
+        # judge the homepage, not the stale deep link
+        parsed_site = urllib.parse.urlparse(website)
+        if (not isinstance(audit, Exception) and parsed_site.path not in ("", "/")
+                and any("HTTP error" in p for p in audit.get("pain_points", []))):
+            website = f"{parsed_site.scheme}://{parsed_site.netloc}/"
+            audit = await audit_website(website)
         if isinstance(audit, Exception) or not audit.get("needs_work"):
             return None  # site is fine (or could not be checked) -> no evidence they need us
         if not isinstance(contacts, Exception):
@@ -335,8 +406,9 @@ async def harvest_local_businesses(niche: str = "All Industries", country: str =
             if use_tomtom:
                 found = []
                 for cat in cats:
-                    for b in await tomtom_search(cat["query"], ISO2[ck], lat, lon):
-                        found.append((b, cat["label"]))
+                    for phrase in cat["query"].split("|"):
+                        for b in await tomtom_search(phrase, ISO2[ck], lat, lon):
+                            found.append((b, cat["label"]))
             else:
                 found = []
                 for b in await overpass_search(cats, lat, lon):
