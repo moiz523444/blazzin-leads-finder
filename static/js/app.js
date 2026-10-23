@@ -401,9 +401,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }, 1000);
 
         try {
-            // Generous timeout (240s / 4 minutes) so deep web audits & contact extractions never get aborted
+            // Generous timeout (300s / 5 minutes) - large all-country scans take ~3.5 minutes
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 240000);
+            const timeoutId = setTimeout(() => controller.abort(), 300000);
 
             const res = await fetch("/api/scan", {
                 method: "POST",
@@ -425,7 +425,8 @@ document.addEventListener("DOMContentLoaded", () => {
             if (timeRemainingSpan) timeRemainingSpan.textContent = "Done!";
 
             if (data.success) {
-                addLog(`Success! ${data.harvested_count} new leads added.`, data.harvested_count ? "success" : "warn");
+                addLog(`Success! ${data.harvested_count} new leads added. "Export Last Scan" downloads only these.`, data.harvested_count ? "success" : "warn");
+                refreshExportLabel();
                 if (data.message) addLog(data.message, "warn");
 
                 // Sync filter with scanned country
@@ -454,7 +455,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             if (err.name === 'AbortError') {
-                addLog("Scan took longer than 4 minutes. Please try picking a specific country or niche.", "warn");
+                addLog("Scan took longer than 5 minutes. Please try picking a specific country or niche.", "warn");
             } else {
                 addLog(`Notice: ${err.message}`, "warn");
             }
@@ -488,10 +489,25 @@ document.addEventListener("DOMContentLoaded", () => {
     filterService.addEventListener("change", fetchLeads);
     filterStatus.addEventListener("change", fetchLeads);
 
-    // Export CSV
+    // Export CSV: default = only the new leads from the most recent scan (never re-export leads already worked)
+    const exportCsvLabel = document.getElementById("exportCsvLabel");
+    async function refreshExportLabel() {
+        try {
+            const d = await (await fetch("/api/last-scan")).json();
+            if (exportCsvLabel) exportCsvLabel.textContent = d.scan_id ? `Export Last Scan (${d.count})` : "Export Last Scan";
+        } catch (err) {
+            console.error(err);
+        }
+    }
     exportCsvBtn.addEventListener("click", () => {
-        window.location.href = "/api/export";
+        window.location.href = "/api/export?scope=last";
     });
+    const exportAllBtn = document.getElementById("exportAllBtn");
+    if (exportAllBtn) {
+        exportAllBtn.addEventListener("click", () => {
+            window.location.href = "/api/export?scope=all";
+        });
+    }
 
     // Clear DB
     clearAllBtn.addEventListener("click", async () => {
@@ -504,6 +520,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Initial Fetch
+    refreshExportLabel();
     loadRegions();
     fetchLeads();
     fetchStats();

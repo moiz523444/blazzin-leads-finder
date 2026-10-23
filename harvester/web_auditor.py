@@ -133,7 +133,9 @@ async def audit_website(url: str) -> Dict[str, Any]:
             ssl_invalid = True
             res, speed_ms = await _fetch(clean_url, verify=False)
 
-        if res.status_code in _BLOCKED_STATUSES:
+        # Only "page gone" (404/410) and server errors (5xx) prove a broken site; other 4xx codes
+        # (403, 429, 432...) are firewalls/bot-blocks that a normal visitor never sees
+        if res.status_code in _BLOCKED_STATUSES or (400 <= res.status_code < 500 and res.status_code not in (404, 410)):
             return _inconclusive(f"site blocked our checker (HTTP {res.status_code})", cms)
         if res.status_code >= 400:
             return {

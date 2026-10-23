@@ -39,9 +39,13 @@
                     <span class="pulse-dot"></span>
                     <span>System Operational</span>
                 </div>
-                <button id="exportCsvBtn" class="btn btn-secondary">
+                <button id="exportCsvBtn" class="btn btn-secondary" title="Only the NEW leads found by your most recent scan">
                     <i data-lucide="download"></i>
-                    <span>Export CSV</span>
+                    <span id="exportCsvLabel">Export Last Scan</span>
+                </button>
+                <button id="exportAllBtn" class="btn btn-danger-ghost" title="Every saved lead, including ones you already contacted">
+                    <i data-lucide="files"></i>
+                    <span>All</span>
                 </button>
                 <button id="clearAllBtn" class="btn btn-danger-ghost" title="Clear Leads Database">
                     <i data-lucide="trash-2"></i>
@@ -383,7 +387,7 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=3.0"></script>
+    <script src="/static/js/app.js?v=3.2"></script>
 </body>
 
 </html>

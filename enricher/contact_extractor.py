@@ -176,24 +176,10 @@ async def extract_contacts_from_url(url: str, default_country: str = "US") -> Di
         async def fetch_page(idx: int, target_page: str):
             try:
                 res = await client.get(target_page, headers=headers)
+                # Bot-blocked pages (403) are skipped: the old browser-impersonation retry rarely found
+                # anything and flooded the terminal with "h2 connection driver error" lines
                 if res.status_code < 400:
                     return idx, res.text
-                if res.status_code == 403:
-                    # Cloudflare / anti-bot block - bypass with primp browser TLS in thread pool
-                    import primp
-                    def _sync_primp():
-                        try:
-                            p_client = primp.Client(impersonate="random", impersonate_os="random", timeout=3.5)
-                            p_res = p_client.get(target_page)
-                            if p_res.status_code < 400:
-                                return p_res.text
-                        except Exception:
-                            pass
-                        return None
-                    loop = asyncio.get_running_loop()
-                    p_text = await loop.run_in_executor(None, _sync_primp)
-                    if p_text:
-                        return idx, p_text
             except Exception:
                 pass
             return idx, None

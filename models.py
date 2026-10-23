@@ -25,6 +25,7 @@ class Lead(BaseModel):
     audit_summary: Optional[str] = ""
     ai_pitch: Optional[str] = ""
     status: str = "new" # 'new', 'contacted', 'replied', 'closed'
+    scan_id: Optional[str] = "" # which scan found this lead - lets the CSV export just one scan's new leads
     created_at: Optional[str] = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
 
 class ScanRequest(BaseModel):

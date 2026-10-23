@@ -14,7 +14,8 @@ _conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
 _conn.row_factory = sqlite3.Row
 
 # Columns added after the first release - created on old databases by init_db()
-_NEW_COLUMNS = {"country": "TEXT DEFAULT ''", "region": "TEXT DEFAULT ''", "category": "TEXT DEFAULT ''"}
+_NEW_COLUMNS = {"country": "TEXT DEFAULT ''", "region": "TEXT DEFAULT ''", "category": "TEXT DEFAULT ''",
+                "scan_id": "TEXT DEFAULT ''"}
 
 
 def init_db():
@@ -45,6 +46,8 @@ def init_db():
             UNIQUE(business_name, phone, website)
         )
         """)
+        # One row per scan (even scans that found 0 new leads), so "last scan" never falls back to an older batch
+        cursor.execute("CREATE TABLE IF NOT EXISTS scans (scan_id TEXT PRIMARY KEY, lead_count INTEGER, created_at TEXT)")
         existing = {row["name"] for row in cursor.execute("PRAGMA table_info(leads)")}
         for col, ddl in _NEW_COLUMNS.items():
             if col not in existing:
@@ -78,8 +81,8 @@ def save_lead(lead: Lead) -> Optional[int]:
                 business_name, source, service_needed, category, website, has_website,
                 location, country, region, email, phone, whatsapp, contact_name, social_links,
                 pain_points, intent_level, budget_estimate, audit_score,
-                audit_summary, ai_pitch, status, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                audit_summary, ai_pitch, status, created_at, scan_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 lead.business_name,
                 lead.source,
@@ -102,7 +105,8 @@ def save_lead(lead: Lead) -> Optional[int]:
                 lead.audit_summary or "",
                 lead.ai_pitch or "",
                 lead.status or "new",
-                lead.created_at
+                lead.created_at,
+                lead.scan_id or ""
             ))
             _conn.commit()
             if cursor.rowcount == 0:
@@ -117,13 +121,30 @@ def save_lead(lead: Lead) -> Optional[int]:
             return None
 
 
+def record_scan(scan_id: str, lead_count: int):
+    with _lock:
+        _conn.execute("INSERT OR REPLACE INTO scans (scan_id, lead_count, created_at) VALUES (?, ?, datetime('now'))",
+                      (scan_id, lead_count))
+        _conn.commit()
+
+
+def get_latest_scan_id() -> str:
+    with _lock:
+        row = _conn.execute("SELECT MAX(scan_id) FROM scans").fetchone()
+        return row[0] or ""
+
+
 def get_leads(source: Optional[str] = None, country: Optional[str] = None, service: Optional[str] = None,
               status: Optional[str] = None, search: Optional[str] = None, region: Optional[str] = None,
-              limit: int = 200) -> List[Dict[str, Any]]:
+              limit: int = 200, scan_id: Optional[str] = None) -> List[Dict[str, Any]]:
     with _lock:
         cursor = _conn.cursor()
         query = "SELECT * FROM leads WHERE 1=1"
         params = []
+
+        if scan_id is not None:
+            query += " AND scan_id = ?"
+            params.append(scan_id)
 
         if source and source != "all":
             query += " AND source = ?"
@@ -206,8 +227,9 @@ def get_stats() -> Dict[str, Any]:
         }
 
 
-def export_leads_csv() -> str:
-    leads = get_leads(limit=100000)
+def export_leads_csv(scan_id: Optional[str] = None) -> str:
+    """All leads, or only the leads found by one scan when scan_id is given."""
+    leads = get_leads(limit=100000, scan_id=scan_id)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
@@ -246,4 +268,5 @@ def clear_all_leads():
     with _lock:
         cursor = _conn.cursor()
         cursor.execute("DELETE FROM leads")
+        cursor.execute("DELETE FROM scans")
         _conn.commit()

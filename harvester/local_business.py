@@ -67,7 +67,7 @@ SOCIAL_HOSTS = ("facebook.com", "fb.com", "instagram.com", "linktr.ee", "tiktok.
 CHAIN_PATH = re.compile(r"/(locations?|stores?|branches|clinics|offices|pages|find-a-|salons?|studios?|team|agents?|our-people|doctors?)\b", re.I)
 # Franchises, hotel brands, public bodies and non-businesses are real but don't hire freelancers for a website
 CHAIN_NAME = re.compile(
-    r"\bfranchis|\bhospital\b|\buniversity\b|\bministry\b|\bgovernment\b|\bembassy\b|\bmunicipality\b|\bcouncil\b"
+    r"\bfranchis|\bhospitals?\b|\buniversity\b|\bministry\b|\bgovernment\b|\bembassy\b|\bmunicipality\b|\bcouncil\b"
     r"|\b(westin|marriott|sheraton|hilton|hyatt|radisson|rotana|m[eé]ridien|novotel|ibis|holiday inn|best western|"
     r"ramada|crowne plaza|intercontinental|four seasons|ritz|courtyard|hampton inn|premier inn|travelodge)\b"
     r"|wastewater|treatment plant|\bcondominium|\bholdings\b|highway operations|\b\d{2,4}\s*(am|fm)\b|\bradio\b",

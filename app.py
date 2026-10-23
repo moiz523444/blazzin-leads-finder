@@ -9,6 +9,7 @@ import asyncio
 from typing import Optional, List
 
 import re
+from datetime import datetime
 
 import config
 from models import Lead, ScanRequest, StatusUpdate
@@ -105,6 +106,8 @@ async def run_scan(req: ScanRequest):
     """
     all_harvested = []
     existing_sigs = db.get_existing_signatures()
+    # Sortable ID shared by every lead this scan saves, so "Export last scan" returns only these
+    scan_id = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # The search-engine sources are capped (they rely on a handful of web searches); verified local scales with the slider
     legacy_sources = [s for s in req.sources if s != "local_verified"]
@@ -164,6 +167,7 @@ async def run_scan(req: ScanRequest):
 
 
     async def enrich_lead(lead: Lead):
+        lead.scan_id = scan_id
         lead.ai_pitch = await generate_pitch(lead, gemini_api_key=req.gemini_api_key)
         lead_id = db.save_lead(lead)
         if lead_id:
@@ -172,6 +176,7 @@ async def run_scan(req: ScanRequest):
 
     # Parallel enrichment for maximum speed
     saved_leads = await asyncio.gather(*(enrich_lead(l) for l in valid_leads), return_exceptions=False)
+    db.record_scan(scan_id, len(saved_leads))
 
     message = ""
     if "local_verified" in req.sources and not config.TOMTOM_API_KEY:
@@ -183,19 +188,31 @@ async def run_scan(req: ScanRequest):
     return {
         "success": True,
         "harvested_count": len(saved_leads),
+        "scan_id": scan_id,
         "leads": saved_leads,
         "message": message,
         "stats": db.get_stats()
     }
 
 @app.get("/api/export")
-async def export_csv():
-    csv_data = db.export_leads_csv()
+async def export_csv(scope: str = "last"):
+    """scope=last (default): only the new leads from the most recent scan. scope=all: every saved lead."""
+    if scope == "all":
+        csv_data, filename = db.export_leads_csv(), "all_leads.csv"
+    else:
+        last = db.get_latest_scan_id()
+        csv_data = db.export_leads_csv(scan_id=last or "__none__")
+        filename = f"new_leads_{last or 'none'}.csv"
     return Response(
         content=csv_data,
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=omni_agency_leads.csv"}
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+@app.get("/api/last-scan")
+async def last_scan():
+    last = db.get_latest_scan_id()
+    return {"scan_id": last, "count": len(db.get_leads(limit=100000, scan_id=last)) if last else 0}
 
 @app.post("/api/clear")
 async def clear_database():
