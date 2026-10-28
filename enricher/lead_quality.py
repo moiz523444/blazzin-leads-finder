@@ -208,6 +208,10 @@ async def find_company_domain(company_name: str, tlds: List[str]) -> Tuple[str, 
     blocked = []
 
     async def probe(url: str) -> str:
+        import netfix
+        # Most guessed domains don't exist - rule them out with a cheap async DNS check before connecting
+        if await netfix.host_exists(urllib.parse.urlparse(url).netloc) is False:
+            return ""
         try:
             async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, verify=False, headers=BROWSER_HEADERS) as c:
                 r = await c.get(url)

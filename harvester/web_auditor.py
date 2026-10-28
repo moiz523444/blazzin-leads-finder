@@ -48,12 +48,19 @@ async def _fetch(url: str, verify: bool):
                 raise
 
 
+_internet_ok_until = 0.0
+
+
 async def our_internet_ok() -> bool:
-    """Guards 'site is down' claims against our OWN flaky DNS/network."""
+    """Guards 'site is down' claims against our OWN flaky DNS/network. A success is trusted for 30s."""
+    global _internet_ok_until
+    if time.time() < _internet_ok_until:
+        return True
     for probe in ("https://www.google.com/generate_204", "https://cloudflare.com/cdn-cgi/trace"):
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 await client.get(probe)
+            _internet_ok_until = time.time() + 30
             return True
         except Exception:
             continue
@@ -65,19 +72,8 @@ async def domain_exists(host: str) -> Optional[bool]:
     Asks public DNS-over-HTTPS resolvers (bypassing the local, sometimes flaky DNS) whether a domain resolves.
     True = resolves, False = does not exist / no address, None = could not find out.
     """
-    host = (host or "").split(":")[0].strip().lower()
-    for resolver in ("https://cloudflare-dns.com/dns-query", "https://dns.google/resolve"):
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                res = await client.get(resolver, params={"name": host, "type": "A"}, headers={"accept": "application/dns-json"})
-            data = res.json()
-            if data.get("Status") == 3:  # NXDOMAIN
-                return False
-            if data.get("Status") == 0:
-                return any(a.get("type") in (1, 5) for a in data.get("Answer", []))
-        except Exception:
-            continue
-    return None
+    import netfix
+    return await netfix.host_exists(host)
 
 
 # Status codes that usually mean "our scraper was blocked or rate-limited", not "the site is broken"

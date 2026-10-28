@@ -340,6 +340,13 @@ document.addEventListener("DOMContentLoaded", () => {
     scanForm.addEventListener("submit", async (e) => {
         e.preventDefault();
 
+        // While a scan runs the button is a Stop button
+        if (scanRunning) {
+            startScanBtn.disabled = true;
+            await fetch("/api/scan/stop", { method: "POST" });
+            return;
+        }
+
         // Get selected sources
         const checkedSources = Array.from(document.querySelectorAll('input[name="source"]:checked')).map(cb => cb.value);
         if (checkedSources.length === 0) {
@@ -353,125 +360,130 @@ document.addEventListener("DOMContentLoaded", () => {
         const limit = parseInt(volumeSlider.value);
         const apiKey = document.getElementById("apiKeyInput").value;
 
-        // UI state
         startScanBtn.disabled = true;
-        startScanBtn.innerHTML = `<i data-lucide="loader-2" class="spin"></i> <span>Autonomous Scanning Active...</span>`;
-        lucide.createIcons();
-
-        addLog(`Initiating multi-channel scan for [${niche}] in [${country}${region !== "all" ? " / " + region : ""}]...`, "info");
-        addLog(`Targeting channels: ${checkedSources.join(", ")}`, "normal");
-
-        const progressMsgs = [
-            "Connecting to public search registries & social endpoints...",
-            "Discovering active businesses without websites...",
-            "Running technical speed & mobile audits on candidate sites...",
-            "Extracting verified WhatsApp numbers & business emails...",
-            "Generating custom AI outreach pitches for verified leads..."
-        ];
-        let pIdx = 0;
-        const progressTimer = setInterval(() => {
-            if (pIdx < progressMsgs.length) {
-                addLog(progressMsgs[pIdx], "normal");
-                pIdx++;
-            }
-        }, 4000);
-
-        // Dynamic Time Remaining & Progress Counter
-        const scanTimerBadge = document.getElementById("scanTimerBadge");
-        const timeRemainingSpan = document.getElementById("timeRemaining");
-        const scanProgressBar = document.getElementById("scanProgressBar");
-        const progressBarFill = document.getElementById("progressBarFill");
-
-        let estimatedSeconds = Math.max(25, Math.min(180, checkedSources.length * 20));
-        let elapsed = 0;
-        if (scanTimerBadge) scanTimerBadge.style.display = "inline-flex";
-        if (scanProgressBar) scanProgressBar.style.display = "block";
-        if (progressBarFill) progressBarFill.style.width = "5%";
-
-        const countdownInterval = setInterval(() => {
-            elapsed++;
-            const remaining = Math.max(1, estimatedSeconds - elapsed);
-            if (timeRemainingSpan) {
-                timeRemainingSpan.textContent = `~${remaining}s remaining`;
-            }
-            if (progressBarFill) {
-                const percent = Math.min(95, Math.round((elapsed / estimatedSeconds) * 90) + 5);
-                progressBarFill.style.width = `${percent}%`;
-            }
-        }, 1000);
-
         try {
-            // Generous timeout (300s / 5 minutes) - large all-country scans take ~3.5 minutes
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 300000);
-
-            const res = await fetch("/api/scan", {
+            const res = await fetch("/api/scan/start", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    sources: checkedSources,
-                    niche: niche,
-                    country: country,
-                    region: region,
-                    limit: limit,
-                    gemini_api_key: apiKey
-                }),
-                signal: controller.signal
+                body: JSON.stringify({ sources: checkedSources, niche, country, region, limit, gemini_api_key: apiKey })
             });
-            clearTimeout(timeoutId);
-
             const data = await res.json();
-            if (progressBarFill) progressBarFill.style.width = "100%";
-            if (timeRemainingSpan) timeRemainingSpan.textContent = "Done!";
-
-            if (data.success) {
-                addLog(`Success! ${data.harvested_count} new leads added. "Export Last Scan" downloads only these.`, data.harvested_count ? "success" : "warn");
-                refreshExportLabel();
-                if (data.message) addLog(data.message, "warn");
-
-                // Sync filter with scanned country
-                if (searchInput) searchInput.value = "";
-                if (filterSource) filterSource.value = "all";
-                if (filterCountry) filterCountry.value = (country || "ALL").toUpperCase() === "ALL" ? "all" : country.toUpperCase();
-                if (filterRegion) {
-                    fillRegionSelect(filterRegion, filterCountry.value, "All States");
-                    filterRegion.value = "all";
-                }
-                if (filterService) filterService.value = "all";
-                if (filterStatus) filterStatus.value = "all";
-
-                await fetchLeads();
-
-                if (data.stats) {
-                    statTotal.textContent = data.stats.total_leads || 0;
-                    statHighIntent.textContent = data.stats.high_intent_leads || 0;
-                    statNoWebsite.textContent = data.stats.no_website_leads || 0;
-                    statContacted.textContent = data.stats.contacted_leads || 0;
-                } else {
-                    await fetchStats();
-                }
-            } else {
-                addLog(`Scan finished with warning: ${data.message || 'Unknown response'}`, "warn");
-            }
+            if (!data.success) addLog(data.message || "Could not start the scan.", "warn");
+            logSeq = 0;
+            lastRefreshAt = 0;
+            setScanUi(true);
+            startPolling();
         } catch (err) {
-            if (err.name === 'AbortError') {
-                addLog("Scan took longer than 5 minutes. Please try picking a specific country or niche.", "warn");
-            } else {
-                addLog(`Notice: ${err.message}`, "warn");
-            }
-        } finally {
-            clearInterval(progressTimer);
-            clearInterval(countdownInterval);
-            setTimeout(() => {
-                if (scanTimerBadge) scanTimerBadge.style.display = "none";
-                if (scanProgressBar) scanProgressBar.style.display = "none";
-                if (progressBarFill) progressBarFill.style.width = "0%";
-            }, 3000);
-            startScanBtn.disabled = false;
-            startScanBtn.innerHTML = `<i data-lucide="crosshair"></i> <span>Launch Autonomous Scan</span>`;
-            lucide.createIcons();
+            addLog(`Notice: ${err.message}`, "warn");
+            setScanUi(false);
         }
     });
+
+    // ---- Background scan: runs on the server until the target number of NEW leads is reached ----
+    const scanTimerBadge = document.getElementById("scanTimerBadge");
+    const timeRemainingSpan = document.getElementById("timeRemaining");
+    const scanProgressBar = document.getElementById("scanProgressBar");
+    const progressBarFill = document.getElementById("progressBarFill");
+    let scanRunning = false;
+    let pollTimer = null;
+    let logSeq = 0;          // last server log line already shown
+    let lastRefreshAt = 0;   // lead count when the list was last refreshed
+
+    function fmtDuration(sec) {
+        sec = Math.max(0, Math.round(sec || 0));
+        const m = Math.floor(sec / 60);
+        return m ? `${m}m ${sec % 60}s` : `${sec}s`;
+    }
+
+    function setScanUi(running) {
+        scanRunning = running;
+        startScanBtn.disabled = false;
+        startScanBtn.innerHTML = running
+            ? `<i data-lucide="square"></i> <span>Stop Scan (leads found so far are kept)</span>`
+            : `<i data-lucide="crosshair"></i> <span>Launch Autonomous Scan</span>`;
+        if (running) {
+            if (scanTimerBadge) scanTimerBadge.style.display = "inline-flex";
+            if (scanProgressBar) scanProgressBar.style.display = "block";
+        }
+        lucide.createIcons();
+    }
+
+    function renderScanStatus(s) {
+        (s.log || []).forEach(entry => {
+            addLog(entry.text, entry.kind);
+            logSeq = Math.max(logSeq, entry.seq);
+        });
+        const pct = s.target ? Math.round((s.found / s.target) * 100) : 0;
+        if (progressBarFill) progressBarFill.style.width = `${Math.max(3, Math.min(100, pct))}%`;
+        if (timeRemainingSpan) {
+            timeRemainingSpan.textContent = s.state === "running"
+                ? `${s.found}/${s.target} leads · ~${fmtDuration(s.eta_seconds)} left · ${fmtDuration(s.elapsed)} elapsed`
+                : `${s.found}/${s.target} leads · finished in ${fmtDuration(s.elapsed)}`;
+        }
+    }
+
+    async function pollScan() {
+        try {
+            const s = await (await fetch(`/api/scan/status?since=${logSeq}`)).json();
+            if (s.state === "idle") {
+                clearInterval(pollTimer);
+                pollTimer = null;
+                setScanUi(false);
+                return;
+            }
+            renderScanStatus(s);
+            if (s.found - lastRefreshAt >= 5) {  // show new leads in the list as they arrive
+                lastRefreshAt = s.found;
+                fetchLeads();
+                fetchStats();
+            }
+            if (s.state !== "running") await finishScan(s);
+        } catch (err) {
+            console.error("Scan status error:", err);
+        }
+    }
+
+    function startPolling() {
+        if (!pollTimer) pollTimer = setInterval(pollScan, 2000);
+        pollScan();
+    }
+
+    async function finishScan(s) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        setScanUi(false);
+        if (s.found) addLog(`"Export Last Scan" downloads only these ${s.found} new leads.`, "info");
+        refreshExportLabel();
+
+        // Show the full list (new leads are at the top)
+        if (searchInput) searchInput.value = "";
+        [filterSource, filterCountry, filterService, filterStatus].forEach(sel => { if (sel) sel.value = "all"; });
+        if (filterRegion) {
+            fillRegionSelect(filterRegion, "all", "All States");
+            filterRegion.value = "all";
+        }
+        await fetchLeads();
+        await fetchStats();
+        setTimeout(() => {
+            if (scanRunning) return;
+            if (scanTimerBadge) scanTimerBadge.style.display = "none";
+            if (scanProgressBar) scanProgressBar.style.display = "none";
+        }, 15000);
+    }
+
+    // Reopened the page while a scan is running? Re-attach to it.
+    (async () => {
+        try {
+            const s = await (await fetch("/api/scan/status")).json();
+            if (s.state === "running") {
+                addLog("A scan is running - showing its live progress.", "info");
+                setScanUi(true);
+                startPolling();
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    })();
 
     // Search & Filter change events
     let debounceTimer;

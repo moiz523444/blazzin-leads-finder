@@ -66,6 +66,43 @@ def resolve_doh(host: str):
     return None
 
 
+_exists_cache = {}  # host -> (expires_at, True/False)
+
+
+async def host_exists(host: str):
+    """
+    Async DNS-over-HTTPS existence check (True / False / None if unknown). Reaches the resolvers by IP and
+    never blocks a thread - use it before connecting to guessed domains, most of which don't exist and
+    would otherwise each tie up a thread in getaddrinfo.
+    """
+    import httpx
+    host = (host or "").split(":")[0].strip().lower().rstrip(".")
+    now = time.time()
+    hit = _exists_cache.get(host)
+    if hit and hit[0] > now:
+        return hit[1]
+    for endpoint in _DOH_ENDPOINTS:
+        try:
+            async with httpx.AsyncClient(timeout=6.0, verify=_SSL) as client:
+                res = await client.get(endpoint, params={"name": host, "type": "A"}, headers={"accept": "application/dns-json"})
+            data = res.json()
+        except Exception:
+            continue
+        if data.get("Status") == 3:
+            result = False
+        elif data.get("Status") == 0:
+            result = any(a.get("type") in (1, 5) for a in data.get("Answer", []))
+            ips = [a["data"] for a in data.get("Answer", []) if a.get("type") == 1]
+            if ips:
+                with _lock:
+                    _cache[host] = (now + 300, ips)
+        else:
+            continue
+        _exists_cache[host] = (now + 600, result)
+        return result
+    return None
+
+
 def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
     try:
         return _original_getaddrinfo(host, port, family, type, proto, flags)
@@ -73,6 +110,9 @@ def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
         name = host.decode() if isinstance(host, bytes) else host
         if not name or _is_ip(name) or name == "localhost" or family == socket.AF_INET6:
             raise
+        known = _exists_cache.get(name.lower())
+        if known and known[0] > time.time() and known[1] is False:
+            raise  # already confirmed not to exist - skip the slow DoH round-trip
         ips = resolve_doh(name)
         if not ips:
             raise

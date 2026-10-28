@@ -43,10 +43,18 @@ Open http://127.0.0.1:8000
 
 A scan uses about 2 TomTom requests per city searched (roughly 10-20 per scan).
 
+## Scans
+
+A scan runs in the background ([scan_jobs.py](scan_jobs.py)) until the **target number of new leads** is
+reached: each round searches ~10 new cities, every verified lead is saved immediately, and the dashboard shows
+`found / target`, an estimated time remaining (from the live rate) and a Stop button. Safety limits: 25 minutes,
+12 rounds, or 3 rounds in a row with nothing new (the niche/area is used up).
+
 ## Data
 
 Leads are stored in `leads.db` (SQLite, git-ignored). Scans add new leads and skip ones already saved,
-so contacted status is kept. "Clear" in the dashboard deletes everything.
+so contacted status is kept. **Export Last Scan** downloads only the new leads from the most recent scan;
+**All** downloads everything. "Clear" in the dashboard deletes everything.
 
 ## Troubleshooting
 

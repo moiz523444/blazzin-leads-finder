@@ -5,23 +5,13 @@ from fastapi import FastAPI, Request, BackgroundTasks, Query
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import asyncio
-from typing import Optional, List
-
-import re
-from datetime import datetime
+from typing import Optional
 
 import config
-from models import Lead, ScanRequest, StatusUpdate
+from models import ScanRequest, StatusUpdate
 import database as db
-from harvester.local_business import harvest_local_businesses
+import scan_jobs
 from harvester.regions import list_regions, COUNTRY_NAMES
-from harvester.meta_ads import harvest_meta_ads
-from harvester.ecom_funnel import harvest_ecom_stores
-from harvester.zero_website import harvest_zero_website_leads
-from harvester.app_store import harvest_app_store
-from harvester.social_media import harvest_social_leads
-from enricher.ai_pitcher import generate_pitch
 
 app = FastAPI(title="Omni-Lead AI Engine", description="Autonomous High-Intent Lead Intelligence Platform for Software Agencies")
 
@@ -78,121 +68,30 @@ async def update_status(lead_id: int, status_update: StatusUpdate):
     return {"success": True, "lead_id": lead_id, "status": status_update.status}
 
 
-_COUNTRY_HINTS = [
-    ("UAE", r"\bUAE\b|United Arab Emirates|Dubai|Abu Dhabi|Sharjah|Ajman|Fujairah|Ras Al Khaimah|\bae\b"),
-    ("QA", r"\bQA\b|Qatar|Doha|Lusail|Al Rayyan|Wakrah"),
-    ("UK", r"\bUK\b|United Kingdom|\bGB\b|England|Scotland|Wales|London|Manchester|Birmingham"),
-    ("CA", r"\bCA\b|Canada|Toronto|Vancouver|Montreal|Calgary|Ontario|Quebec"),
-    ("US", r"\bUS\b|\bUSA\b|United States"),
-]
+@app.post("/api/scan/start")
+async def start_scan(req: ScanRequest):
+    """Starts a background scan that keeps going until `limit` NEW leads are found (or a safety limit hits)."""
+    running = scan_jobs.current_job()
+    if running and running.state == "running":
+        return {"success": False, "message": "A scan is already running.", **running.status()}
+    job = scan_jobs.start_job(req)
+    return {"success": True, **job.status()}
 
-def infer_country(lead: Lead, scan_country: str) -> str:
-    """Older harvesters only write free-text locations - derive the country code used for filtering."""
-    if lead.country:
-        return lead.country.upper()
-    if scan_country and scan_country.upper() != "ALL":
-        return scan_country.upper()
-    for code, pattern in _COUNTRY_HINTS:
-        if re.search(pattern, lead.location or "", re.I):
-            return code
-    return ""
+@app.get("/api/scan/status")
+async def scan_status(since: int = 0):
+    """Live progress of the current/last scan: found / target, ETA and new log lines after `since`."""
+    job = scan_jobs.current_job()
+    if not job:
+        return {"state": "idle"}
+    return job.status(since)
 
-
-@app.post("/api/scan")
-async def run_scan(req: ScanRequest):
-    """
-    Executes an autonomous multi-source harvesting and enrichment cycle.
-    New leads are added to the existing ones; anything already saved is skipped.
-    """
-    all_harvested = []
-    existing_sigs = db.get_existing_signatures()
-    # Sortable ID shared by every lead this scan saves, so "Export last scan" returns only these
-    scan_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-
-    # The search-engine sources are capped (they rely on a handful of web searches); verified local scales with the slider
-    legacy_sources = [s for s in req.sources if s != "local_verified"]
-    per_source_limit = max(2, min(10, req.limit // max(1, len(req.sources))))
-
-    tasks = []
-    if "local_verified" in req.sources:
-        local_limit = req.limit - per_source_limit * len(legacy_sources) if legacy_sources else req.limit
-        tasks.append(harvest_local_businesses(niche=req.niche, country=req.country, region=req.region or "all",
-                                              limit=max(5, local_limit), exclude=existing_sigs))
-    if "meta_ads" in req.sources:
-        tasks.append(harvest_meta_ads(niche=req.niche, country=req.country, limit=per_source_limit))
-    if "ecom_funnel" in req.sources:
-        tasks.append(harvest_ecom_stores(niche=req.niche, country=req.country, limit=per_source_limit))
-    if "new_business" in req.sources:
-        tasks.append(harvest_zero_website_leads(niche=req.niche, country=req.country, limit=per_source_limit))
-    if "app_store" in req.sources:
-        tasks.append(harvest_app_store(niche=req.niche, country=req.country, limit=per_source_limit))
-    if "social_media" in req.sources:
-        tasks.append(harvest_social_leads(niche=req.niche, country=req.country, limit=per_source_limit))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for res in results:
-        if isinstance(res, list):
-            all_harvested.extend(res)
-        elif isinstance(res, Exception):
-            print(f"Harvester failed: {type(res).__name__}: {res}")
-
-    for lead in all_harvested:
-        lead.country = infer_country(lead, req.country)
-
-    # STRICT RULE: Must have callable PHONE or WHATSAPP + NEVER REPEAT ALREADY HARVESTED LEADS
-    fresh_leads = []
-    seen_in_scan = set()
-
-    for lead in all_harvested:
-        if not (lead.phone or lead.whatsapp):
-            continue
-        p = (lead.phone or "").strip()
-        w = (lead.website or "").strip().lower()
-        b = (lead.business_name or "").strip().lower()
-
-        # Check if already in database from previous scans
-        if p in existing_sigs or (w and w in existing_sigs) or b in existing_sigs:
-            continue
-        # Check if already seen in current scan
-        if p in seen_in_scan or (w and w in seen_in_scan) or b in seen_in_scan:
-            continue
-
-        seen_in_scan.add(p)
-        if w:
-            seen_in_scan.add(w)
-        seen_in_scan.add(b)
-        fresh_leads.append(lead)
-
-    valid_leads = fresh_leads
-
-
-    async def enrich_lead(lead: Lead):
-        lead.scan_id = scan_id
-        lead.ai_pitch = await generate_pitch(lead, gemini_api_key=req.gemini_api_key)
-        lead_id = db.save_lead(lead)
-        if lead_id:
-            lead.id = lead_id
-        return lead.model_dump()
-
-    # Parallel enrichment for maximum speed
-    saved_leads = await asyncio.gather(*(enrich_lead(l) for l in valid_leads), return_exceptions=False)
-    db.record_scan(scan_id, len(saved_leads))
-
-    message = ""
-    if "local_verified" in req.sources and not config.TOMTOM_API_KEY:
-        message = ("Running on free OpenStreetMap servers (slow and often busy). "
-                   "Add a free TOMTOM_API_KEY to .env for many more verified leads.")
-    if not saved_leads:
-        message = (message + " " if message else "") + "No new leads this time - scan again (each scan picks different states) or choose another niche."
-
-    return {
-        "success": True,
-        "harvested_count": len(saved_leads),
-        "scan_id": scan_id,
-        "leads": saved_leads,
-        "message": message,
-        "stats": db.get_stats()
-    }
+@app.post("/api/scan/stop")
+async def stop_scan():
+    job = scan_jobs.current_job()
+    if job and job.state == "running":
+        job.stop_requested = True
+        job.log("Stop requested - finishing the leads being checked right now...", "warn")
+    return {"success": True}
 
 @app.get("/api/export")
 async def export_csv(scope: str = "last"):

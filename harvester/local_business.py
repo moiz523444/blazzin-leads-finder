@@ -17,7 +17,7 @@ import re
 import time
 import urllib.parse
 from collections import Counter
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 import httpx
 
@@ -312,11 +312,8 @@ async def _build_lead(biz: Dict[str, Any], country: str, region: str, city: str,
     verified_by_lookup = False
     if not website:
         tlds = COUNTRY_TLDS.get(country, [".com"])
-        # Second try because a single network failure would otherwise look like "no website"
+        # DNS answers come from public DNS-over-HTTPS (netfix), so one attempt is reliable
         found, blocked = await find_company_domain(biz["name"], tlds)
-        if not found:
-            found, blocked2 = await find_company_domain(biz["name"], tlds)
-            blocked = blocked or blocked2
         if not found and blocked:
             return None  # a site with its name exists but hides from checkers - can't claim "no website"
         if not found:
@@ -390,13 +387,19 @@ async def _build_lead(biz: Dict[str, Any], country: str, region: str, city: str,
 
 async def harvest_local_businesses(niche: str = "All Industries", country: str = "ALL", region: str = "all",
                                    limit: int = 20, exclude: Optional[Set[str]] = None,
-                                   time_budget_s: float = 180.0) -> List[Lead]:
-    """Returns up to `limit` verified local-business leads that show a real need for web/digital services."""
+                                   time_budget_s: float = 180.0,
+                                   on_lead: Optional[Callable[[Lead], Awaitable[bool]]] = None,
+                                   should_stop: Optional[Callable[[], bool]] = None) -> List[Lead]:
+    """
+    Returns up to `limit` verified local-business leads that show a real need for web/digital services.
+    on_lead (optional) is awaited for each lead as soon as it is verified; should_stop aborts early.
+    """
     started = time.time()
     exclude = exclude or set()
     use_tomtom = bool(config.TOMTOM_API_KEY)
     categories = resolve_categories(niche)
-    n_targets = min(10, max(3, limit // 4)) if use_tomtom else min(4, max(2, limit // 10))
+    # Even a small remainder gets 6+ cities: only a minority of listings show a verified need
+    n_targets = min(10, max(6, limit // 4)) if use_tomtom else min(4, max(2, limit // 10))
     targets = pick_targets(country, region, n_targets)
 
     async def collect(target):
@@ -456,24 +459,35 @@ async def harvest_local_businesses(niche: str = "All Industries", country: str =
     print(f"[local] {len(candidates)} listings -> {len(filtered)} independent businesses with valid phones")
 
     leads: List[Lead] = []
-    sem = asyncio.Semaphore(12)
+    sem = asyncio.Semaphore(24)  # network-bound: most time is spent waiting on other servers
+    accept_lock = asyncio.Lock()
+
+    def done() -> bool:
+        return len(leads) >= limit or time.time() - started > time_budget_s or bool(should_stop and should_stop())
 
     async def process(c):
         async with sem:
-            if len(leads) >= limit or time.time() - started > time_budget_s:
-                return None
+            if done():
+                return
             try:
-                return await asyncio.wait_for(_build_lead(c[0], c[1], c[2], c[3], c[4]), timeout=45)
+                lead = await asyncio.wait_for(_build_lead(c[0], c[1], c[2], c[3], c[4]), timeout=45)
             except Exception:
-                return None
+                return
+            if not isinstance(lead, Lead):
+                return
+            async with accept_lock:
+                if len(leads) >= limit:
+                    return
+                # on_lead saves it right away (live progress); it returns False for a duplicate
+                if on_lead is not None and not await on_lead(lead):
+                    return
+                leads.append(lead)
 
-    chunk = max(12, limit)
+    chunk = max(48, limit)
     for i in range(0, len(filtered), chunk):
-        if len(leads) >= limit or time.time() - started > time_budget_s:
+        if done():
             break
-        for r in await asyncio.gather(*(process(c) for c in filtered[i:i + chunk])):
-            if isinstance(r, Lead) and len(leads) < limit:
-                leads.append(r)
+        await asyncio.gather(*(process(c) for c in filtered[i:i + chunk]))
     print(f"[local] {len(leads)} leads with verified need in {time.time() - started:.0f}s")
     return leads
 
