@@ -117,6 +117,53 @@ COUNTRY_NAMES = {"US": "United States", "UK": "United Kingdom", "CA": "Canada", 
 ISO2 = {"US": "US", "UK": "GB", "CA": "CA", "UAE": "AE", "QA": "QA"}
 
 
+# IANA time zone per state/province (the dashboard turns this into the business's local time)
+_US_TZ = {
+    "Alabama": "America/Chicago", "Alaska": "America/Anchorage", "Arizona": "America/Phoenix", "Arkansas": "America/Chicago",
+    "California": "America/Los_Angeles", "Colorado": "America/Denver", "Connecticut": "America/New_York",
+    "Delaware": "America/New_York", "District of Columbia": "America/New_York", "Florida": "America/New_York",
+    "Georgia": "America/New_York", "Hawaii": "Pacific/Honolulu", "Idaho": "America/Boise", "Illinois": "America/Chicago",
+    "Indiana": "America/Indiana/Indianapolis", "Iowa": "America/Chicago", "Kansas": "America/Chicago",
+    "Kentucky": "America/New_York", "Louisiana": "America/Chicago", "Maine": "America/New_York",
+    "Maryland": "America/New_York", "Massachusetts": "America/New_York", "Michigan": "America/Detroit",
+    "Minnesota": "America/Chicago", "Mississippi": "America/Chicago", "Missouri": "America/Chicago",
+    "Montana": "America/Denver", "Nebraska": "America/Chicago", "Nevada": "America/Los_Angeles",
+    "New Hampshire": "America/New_York", "New Jersey": "America/New_York", "New Mexico": "America/Denver",
+    "New York": "America/New_York", "North Carolina": "America/New_York", "North Dakota": "America/Chicago",
+    "Ohio": "America/New_York", "Oklahoma": "America/Chicago", "Oregon": "America/Los_Angeles",
+    "Pennsylvania": "America/New_York", "Rhode Island": "America/New_York", "South Carolina": "America/New_York",
+    "South Dakota": "America/Chicago", "Tennessee": "America/Chicago", "Texas": "America/Chicago",
+    "Utah": "America/Denver", "Vermont": "America/New_York", "Virginia": "America/New_York",
+    "Washington": "America/Los_Angeles", "West Virginia": "America/New_York", "Wisconsin": "America/Chicago",
+    "Wyoming": "America/Denver",
+}
+# Cities on the other side of a time-zone line from the rest of their state
+_CITY_TZ = {
+    "el paso": "America/Denver", "evansville": "America/Chicago", "bowling green": "America/Chicago",
+    "knoxville": "America/New_York", "chattanooga": "America/New_York", "rapid city": "America/Denver",
+    "coeur d'alene": "America/Los_Angeles", "pensacola": "America/Chicago",
+}
+_CA_TZ = {
+    "Ontario": "America/Toronto", "Quebec": "America/Toronto", "British Columbia": "America/Vancouver",
+    "Alberta": "America/Edmonton", "Manitoba": "America/Winnipeg", "Saskatchewan": "America/Regina",
+    "Nova Scotia": "America/Halifax", "New Brunswick": "America/Moncton", "Newfoundland and Labrador": "America/St_Johns",
+    "Prince Edward Island": "America/Halifax", "Northwest Territories": "America/Yellowknife",
+    "Yukon": "America/Whitehorse", "Nunavut": "America/Iqaluit",
+}
+_COUNTRY_TZ = {"UK": "Europe/London", "UAE": "Asia/Dubai", "QA": "Asia/Qatar"}
+
+
+def timezone_for(country: str, region: str = "", city: str = "") -> str:
+    country = (country or "").upper()
+    if country in _COUNTRY_TZ:
+        return _COUNTRY_TZ[country]
+    if country == "US":
+        return _CITY_TZ.get((city or "").strip().lower(), _US_TZ.get(region, ""))
+    if country == "CA":
+        return _CA_TZ.get(region, "")
+    return ""
+
+
 def list_regions() -> Dict[str, List[str]]:
     return {c: sorted(r.keys()) for c, r in REGIONS.items()}
 

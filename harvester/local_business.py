@@ -2,7 +2,7 @@
 Verified local businesses from map data, across every state / province / emirate.
 
 Sources (both return the business's own listed phone, website and address - nothing is guessed):
-  1. TomTom Search API  - used when TOMTOM_API_KEY is set (free 2,500 requests/day)
+  1. TomTom Search API  - used when TOMTOM_API_KEY is set (free 2,500 Search requests/month)
   2. OpenStreetMap Overpass API - free, keyless fallback (slower, public servers are often busy)
 
 A business only becomes a lead when there is evidence it needs a service:
@@ -23,7 +23,7 @@ import httpx
 
 import config
 from models import Lead
-from harvester.regions import pick_targets, ISO2, REGIONS
+from harvester.regions import pick_targets, ISO2, REGIONS, timezone_for
 from harvester.web_auditor import audit_website, our_internet_ok
 from enricher.contact_extractor import extract_contacts_from_url, phone_info, is_valid_email
 from enricher.lead_quality import find_company_domain
@@ -103,12 +103,51 @@ def _cat(c) -> Dict[str, Any]:
 # Provider 1: TomTom Search API
 # ---------------------------------------------------------------------------
 _tomtom_sem = asyncio.Semaphore(3)  # free keys are rate-limited (HTTP 429 when ~20 requests fire at once)
+tomtom_quota_exhausted = False      # set when TomTom answers 403 (free monthly allowance used up); scan jobs reset it
+
+
+def hours_from_tomtom(opening_hours: Optional[Dict[str, Any]]) -> Optional[Dict[str, List[List[int]]]]:
+    """
+    TomTom 'nextSevenDays' opening hours -> weekly schedule in the business's local time:
+    {"0": [[540, 1020]], ...} where the key is the weekday (0 = Sunday, like JavaScript) and values are
+    [open, close] in minutes after midnight. Ranges that run past midnight are split across the two days.
+    Returns None when TomTom has no hours for the place.
+    """
+    import datetime as _dt
+    ranges = (opening_hours or {}).get("timeRanges") or []
+    if not ranges:
+        return None
+    week: Dict[str, List[List[int]]] = {}
+
+    def add(day: _dt.date, start: int, end: int):
+        if end > start:
+            week.setdefault(str((day.weekday() + 1) % 7), []).append([start, end])
+
+    for r in ranges:
+        try:
+            s, e = r["startTime"], r["endTime"]
+            s_day = _dt.date.fromisoformat(s["date"])
+            e_day = _dt.date.fromisoformat(e["date"])
+            s_min = s.get("hour", 0) * 60 + s.get("minute", 0)
+            e_min = e.get("hour", 0) * 60 + e.get("minute", 0)
+        except Exception:
+            continue
+        if e_day == s_day:
+            add(s_day, s_min, e_min)
+        else:
+            add(s_day, s_min, 1440)
+            day = s_day + _dt.timedelta(days=1)
+            while day < e_day:  # open around the clock for whole days
+                add(day, 0, 1440)
+                day += _dt.timedelta(days=1)
+            add(e_day, 0, e_min)
+    return week or None
 
 
 async def tomtom_search(query: str, iso2: str, lat: float, lon: float, radius_m: int = 25000) -> List[Dict[str, Any]]:
     url = f"https://api.tomtom.com/search/2/poiSearch/{urllib.parse.quote(query)}.json"
     params = {"key": config.TOMTOM_API_KEY, "lat": lat, "lon": lon, "radius": radius_m,
-              "limit": 100, "countrySet": iso2, "language": "en-GB"}
+              "limit": 100, "countrySet": iso2, "language": "en-GB", "openingHours": "nextSevenDays"}
     for attempt in range(4):
         async with _tomtom_sem:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -117,6 +156,9 @@ async def tomtom_search(query: str, iso2: str, lat: float, lon: float, radius_m:
         if res.status_code != 429:
             break
         await asyncio.sleep(1.5 * (attempt + 1))
+    if res.status_code == 403:
+        global tomtom_quota_exhausted
+        tomtom_quota_exhausted = True
     if res.status_code != 200:
         raise RuntimeError(f"TomTom HTTP {res.status_code}: {res.text[:120]}")
     out = []
@@ -134,6 +176,7 @@ async def tomtom_search(query: str, iso2: str, lat: float, lon: float, radius_m:
             "address": addr.get("freeformAddress", ""),
             "city": addr.get("municipality", "") or addr.get("localName", ""),
             "subdivision": addr.get("countrySubdivisionName", "") or addr.get("countrySubdivision", ""),
+            "hours": hours_from_tomtom(poi.get("openingHours")),
         })
     return out
 
@@ -332,6 +375,7 @@ async def _build_lead(biz: Dict[str, Any], country: str, region: str, city: str,
     email = biz.get("email", "") if is_valid_email(biz.get("email", "")) else ""
     whatsapp = digits if is_mobile else ""
     location = ", ".join(filter(None, [biz.get("city") or city, region, country]))
+    tz = timezone_for(country, region, biz.get("city") or city)
 
     if website:
         audit, contacts = await asyncio.gather(audit_website(website),
@@ -357,7 +401,8 @@ async def _build_lead(biz: Dict[str, Any], country: str, region: str, city: str,
         return Lead(
             business_name=biz["name"][:80], source="local_verified", service_needed="website_redesign",
             category=category, website=website, has_website=True, location=location,
-            country=country, region=region, email=email, phone=formatted, whatsapp=whatsapp,
+            country=country, region=region, timezone=tz, hours=biz.get("hours"),
+            email=email, phone=formatted, whatsapp=whatsapp,
             social_links=socials, pain_points=pain_points[:5], intent_level="High",
             budget_estimate="$1,500 - $5,000", audit_score=audit["audit_score"],
             audit_summary=f"{audit['summary']} Address: {biz.get('address') or location}. Source: {biz['ref']}",
@@ -378,7 +423,8 @@ async def _build_lead(biz: Dict[str, Any], country: str, region: str, city: str,
     return Lead(
         business_name=biz["name"][:80], source="local_verified", service_needed=service,
         category=category, website="", has_website=False, location=location,
-        country=country, region=region, email=email, phone=formatted, whatsapp=whatsapp,
+        country=country, region=region, timezone=tz, hours=biz.get("hours"),
+        email=email, phone=formatted, whatsapp=whatsapp,
         social_links=socials, pain_points=pain_points, intent_level="First-Mover",
         budget_estimate="$800 - $3,000", audit_score=score,
         audit_summary=f"Listed {category.lower()} with a verified phone and no website. Address: {biz.get('address') or location}. Source: {biz['ref']}",

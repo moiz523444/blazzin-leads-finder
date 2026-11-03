@@ -15,7 +15,7 @@ _conn.row_factory = sqlite3.Row
 
 # Columns added after the first release - created on old databases by init_db()
 _NEW_COLUMNS = {"country": "TEXT DEFAULT ''", "region": "TEXT DEFAULT ''", "category": "TEXT DEFAULT ''",
-                "scan_id": "TEXT DEFAULT ''"}
+                "scan_id": "TEXT DEFAULT ''", "timezone": "TEXT DEFAULT ''", "hours": "TEXT DEFAULT ''"}
 
 
 def init_db():
@@ -81,8 +81,8 @@ def save_lead(lead: Lead) -> Optional[int]:
                 business_name, source, service_needed, category, website, has_website,
                 location, country, region, email, phone, whatsapp, contact_name, social_links,
                 pain_points, intent_level, budget_estimate, audit_score,
-                audit_summary, ai_pitch, status, created_at, scan_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                audit_summary, ai_pitch, status, created_at, scan_id, timezone, hours
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 lead.business_name,
                 lead.source,
@@ -106,7 +106,9 @@ def save_lead(lead: Lead) -> Optional[int]:
                 lead.ai_pitch or "",
                 lead.status or "new",
                 lead.created_at,
-                lead.scan_id or ""
+                lead.scan_id or "",
+                lead.timezone or "",
+                json.dumps(lead.hours) if lead.hours else ""
             ))
             _conn.commit()
             if cursor.rowcount == 0:
@@ -181,8 +183,74 @@ def get_leads(source: Optional[str] = None, country: Optional[str] = None, servi
                 item["pain_points"] = json.loads(item["pain_points"]) if item["pain_points"] else []
             except Exception:
                 item["pain_points"] = []
+            try:
+                item["hours"] = json.loads(item["hours"]) if item.get("hours") else None
+            except Exception:
+                item["hours"] = None
             leads.append(item)
         return leads
+
+
+def set_timezone_and_hours(lead_id: int, timezone: str, hours: Optional[dict], hours_checked: bool = True):
+    """Backfill for leads saved before opening hours were collected. hours "{}" = checked, none listed."""
+    with _lock:
+        _conn.execute("UPDATE leads SET timezone = ?, hours = ? WHERE id = ?",
+                      (timezone or "", json.dumps(hours) if hours else ("{}" if hours_checked else ""), lead_id))
+        _conn.commit()
+
+
+_DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+# Assumed 9-5 working days when a business lists no hours (0 = Sunday). Qatar's work week is Sun-Thu.
+_USUAL_DAYS = {"QA": (0, 1, 2, 3, 4)}
+
+
+def _usual_hours(country: str) -> dict:
+    return {str(d): [[540, 1020]] for d in _USUAL_DAYS.get((country or "").upper(), (1, 2, 3, 4, 5))}
+
+
+def hours_in_my_time(hours: Optional[dict], tz: str, country: str = "") -> str:
+    """
+    Business opening hours converted to THIS computer's time zone (the person making the calls), e.g.
+    "Mon 07:00 PM - Tue 03:00 AM; ...". Uses the next real date of each weekday so daylight saving is right.
+    Businesses without listed hours get the country's usual 9-5 work week, marked "(usual hours)".
+    """
+    if not tz:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+        biz_tz = ZoneInfo(tz)
+    except Exception:
+        return ""
+    import datetime as _dt
+    listed = bool(hours)
+    week = hours if listed else _usual_hours(country)
+    today = _dt.datetime.now(biz_tz).date()
+    spans = []
+    for offset in range(7):
+        day = today + _dt.timedelta(days=offset)
+        for start, end in sorted(week.get(str((day.weekday() + 1) % 7)) or []):
+            midnight = _dt.datetime.combine(day, _dt.time(0), tzinfo=biz_tz)
+            s = (midnight + _dt.timedelta(minutes=start)).astimezone()
+            e = (midnight + _dt.timedelta(minutes=end)).astimezone()
+            spans.append((s.weekday(), s, e))
+    spans.sort(key=lambda x: (x[0], x[1].time()))
+    text = "; ".join(f"{s:%a %I:%M %p} - {e:%a %I:%M %p}" if s.date() != e.date() else f"{s:%a %I:%M %p}-{e:%I:%M %p}"
+                     for _, s, e in spans)
+    return text + ("" if listed else " (usual hours - not listed)")
+
+
+def hours_text(hours: Optional[dict]) -> str:
+    """{"1": [[540, 1020]]} -> "Mon 09:00-17:00; ..." for the CSV."""
+    if not hours:
+        return ""
+    parts = []
+    for d in range(7):
+        ranges = hours.get(str(d)) or []
+        if ranges:
+            spans = ", ".join(f"{s // 60:02d}:{s % 60:02d}-{min(e, 1439) // 60:02d}:{min(e, 1439) % 60:02d}" if e < 1440
+                              else f"{s // 60:02d}:{s % 60:02d}-24:00" for s, e in ranges)
+            parts.append(f"{_DAY_NAMES[d]} {spans}")
+    return "; ".join(parts)
 
 
 def update_lead_status(lead_id: int, status: str):
@@ -234,7 +302,9 @@ def export_leads_csv(scan_id: Optional[str] = None) -> str:
     writer = csv.writer(output)
     writer.writerow([
         "ID", "Business Name", "Category", "Source", "Service Needed", "Website", "Has Website",
-        "Location", "Country", "Region", "Email", "Phone", "WhatsApp", "Pain Points", "Intent Level",
+        "Location", "Country", "Region", "Timezone", "Opening Hours (business local time)",
+        "Opening Hours (YOUR time - call window)",
+        "Email", "Phone", "WhatsApp", "Pain Points", "Intent Level",
         "Budget Estimate", "Audit Score", "Audit Summary", "AI Pitch", "Status", "Created At"
     ])
     for l in leads:
@@ -249,6 +319,9 @@ def export_leads_csv(scan_id: Optional[str] = None) -> str:
             l.get("location"),
             l.get("country"),
             l.get("region"),
+            l.get("timezone"),
+            hours_text(l.get("hours")),
+            hours_in_my_time(l.get("hours"), l.get("timezone"), l.get("country")),
             l.get("email"),
             l.get("phone"),
             l.get("whatsapp"),

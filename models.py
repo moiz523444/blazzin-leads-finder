@@ -13,6 +13,8 @@ class Lead(BaseModel):
     location: Optional[str] = "Global"
     country: Optional[str] = "" # 'US', 'UK', 'CA', 'UAE', 'QA'
     region: Optional[str] = "" # state / province / emirate
+    timezone: Optional[str] = "" # IANA zone of the business, e.g. 'America/Chicago'
+    hours: Optional[Dict[str, List[List[int]]]] = None # weekly opening hours, see hours_from_tomtom()
     email: Optional[str] = ""
     phone: Optional[str] = ""
     whatsapp: Optional[str] = ""

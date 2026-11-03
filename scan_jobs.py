@@ -16,6 +16,7 @@ import config
 import database as db
 from models import Lead, ScanRequest
 from enricher.ai_pitcher import generate_pitch
+import harvester.local_business as local_business
 from harvester.local_business import harvest_local_businesses
 from harvester.meta_ads import harvest_meta_ads
 from harvester.ecom_funnel import harvest_ecom_stores
@@ -23,7 +24,7 @@ from harvester.zero_website import harvest_zero_website_leads
 from harvester.app_store import harvest_app_store
 from harvester.social_media import harvest_social_leads
 
-MAX_SECONDS = 25 * 60       # hard stop so one job can't burn the whole free TomTom quota (~2,500 requests/day)
+MAX_SECONDS = 25 * 60       # hard stop so one job can't burn the whole free TomTom quota (2,500 Search requests/month)
 MAX_ROUNDS = 12             # each round searches ~10 new cities
 MAX_EMPTY_ROUNDS = 3        # stop when the chosen niche/area keeps returning nothing new
 ROUND_BUDGET_S = 180        # one round = one batch of cities
@@ -58,7 +59,7 @@ class ScanJob:
         self.target = req.limit
         self.found = 0
         self.round = 0
-        self.state = "running"  # running | done | stopped | exhausted | timeout | error
+        self.state = "running"  # running | done | stopped | exhausted | timeout | quota | error
         self.message = ""
         self.started = time.time()
         self.finished: Optional[float] = None
@@ -118,6 +119,7 @@ async def _run(job: ScanJob):
     # DNS lookups run in the default thread pool; the stock size (~12 threads) queues up during big scans
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64))
     exclude = db.get_existing_signatures()
+    local_business.tomtom_quota_exhausted = False  # a new day may have reset the TomTom quota
 
     async def accept(lead: Lead) -> bool:
         """Final checks + save. Returns False for leads that are not new."""
@@ -178,6 +180,12 @@ async def _run(job: ScanJob):
                 on_lead=accept, should_stop=lambda: job.stop_requested)
             got = job.found - before
             job.log(f"Round {job.round} done: +{got} leads ({job.found}/{job.target})", "info")
+            if local_business.tomtom_quota_exhausted:
+                job.state = "quota"
+                job.message = ("TomTom's free MONTHLY Search allowance (2,500 requests) is used up - it does not reset "
+                               "overnight, only with the new month. Check usage on developer.tomtom.com. "
+                               "Leads found so far are saved.")
+                break
             empty_rounds = empty_rounds + 1 if got == 0 else 0
             if empty_rounds >= MAX_EMPTY_ROUNDS:
                 job.state = "exhausted"

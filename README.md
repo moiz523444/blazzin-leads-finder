@@ -38,7 +38,7 @@ Open http://127.0.0.1:8000
 
 | Key | Where | Free limit |
 |---|---|---|
-| `TOMTOM_API_KEY` | https://developer.tomtom.com - sign up, Dashboard -> Keys | 2,500 requests/day, no card |
+| `TOMTOM_API_KEY` | https://developer.tomtom.com - sign up, Dashboard -> Keys | 2,500 Search requests/month, no card |
 | `PAGESPEED_API_KEY` | Google Cloud console -> enable "PageSpeed Insights API" -> Credentials -> API key | 25,000/day |
 
 A scan uses about 2 TomTom requests per city searched (roughly 10-20 per scan).
@@ -49,6 +49,14 @@ A scan runs in the background ([scan_jobs.py](scan_jobs.py)) until the **target 
 reached: each round searches ~10 new cities, every verified lead is saved immediately, and the dashboard shows
 `found / target`, an estimated time remaining (from the live rate) and a Stop button. Safety limits: 25 minutes,
 12 rounds, or 3 rounds in a row with nothing new (the niche/area is used up).
+
+## Best time to call
+
+Every lead stores the business's **time zone** and, when TomTom lists them, its **opening hours**. Each lead
+card shows the business's local time and `🟢 Open now`, `🔴 Closed · opens 9:00 AM = 7:00 PM your time`, or
+`🟡 Usually open` (no hours listed: Mon-Fri 9-5 assumed). The **📞 filter** shows only businesses you can call
+right now, open ones first. Leads saved before this feature: run `python backfill_hours.py` once
+(one TomTom request per lead).
 
 ## Data
 

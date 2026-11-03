@@ -21,7 +21,7 @@ def _load_env_file():
 
 _load_env_file()
 
-# Free: https://developer.tomtom.com (2,500 requests/day, no credit card)
+# Free: https://developer.tomtom.com (2,500 Search requests/month free, no credit card)
 TOMTOM_API_KEY = os.environ.get("TOMTOM_API_KEY", "")
 # Free: Google Cloud console -> enable "PageSpeed Insights API" -> create API key (25,000/day)
 PAGESPEED_API_KEY = os.environ.get("PAGESPEED_API_KEY", "")

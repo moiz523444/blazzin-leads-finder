@@ -6,3 +6,4 @@ beautifulsoup4>=4.12
 phonenumbers>=8.13
 primp>=0.6
 pydantic>=2.5
+tzdata>=2024.1

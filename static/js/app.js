@@ -19,6 +19,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const filterCountry = document.getElementById("filterCountry");
     const filterService = document.getElementById("filterService");
     const filterStatus = document.getElementById("filterStatus");
+    const filterOpen = document.getElementById("filterOpen");
 
     // Stats
     const statTotal = document.getElementById("statTotal");
@@ -56,6 +57,93 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     function safeUrl(url) {
         return /^https?:\/\//i.test(url || "") ? esc(url) : "#";
+    }
+
+    // ---- Best time to call: business local time + opening hours ----
+    const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+    function nowIn(tz) {
+        const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz, weekday: "short", hour: "numeric", minute: "2-digit", hourCycle: "h23"
+        }).formatToParts(new Date());
+        const get = (t) => (parts.find(p => p.type === t) || {}).value;
+        return { wd: DAY_NAMES.indexOf(get("weekday")), mins: (parseInt(get("hour"), 10) % 24) * 60 + parseInt(get("minute"), 10) };
+    }
+
+    function fmtIn(date, tz, withDay) {
+        const opts = { hour: "numeric", minute: "2-digit" };
+        if (withDay) opts.weekday = "short";
+        if (tz) opts.timeZone = tz;
+        return new Intl.DateTimeFormat("en-US", opts).format(date);
+    }
+
+    function fmtGap(mins) {
+        const h = Math.floor(mins / 60), m = mins % 60;
+        return h ? `${h}h ${m}m` : `${m}m`;
+    }
+
+    // state: open | closed | usual (no hours listed, weekday 9-5) | usual-closed | null (no time zone)
+    function callStatus(lead) {
+        if (!lead.timezone) return null;
+        let now;
+        try { now = nowIn(lead.timezone); } catch (e) { return null; }
+        const hours = lead.hours && Object.keys(lead.hours).length ? lead.hours : null;
+        if (!hours) {
+            // No listed hours: assume 9-5 on the country's working days (Qatar works Sun-Thu)
+            const workDays = lead.country === "QA" ? [0, 1, 2, 3, 4] : [1, 2, 3, 4, 5];
+            const usual = workDays.includes(now.wd) && now.mins >= 540 && now.mins < 1020;
+            return { state: usual ? "usual" : "usual-closed" };
+        }
+        const open = (hours[now.wd] || []).find(([s, e]) => now.mins >= s && now.mins < e);
+        if (open) {
+            // A range ending at midnight may continue into the next day (late-night / 24h businesses)
+            let closesIn = open[1] - now.mins, end = open[1], day = now.wd;
+            for (let i = 0; i < 7 && end === 1440; i++) {
+                day = (day + 1) % 7;
+                const next = (hours[day] || []).find(([s]) => s === 0);
+                if (!next) break;
+                closesIn += next[1];
+                end = next[1];
+            }
+            return { state: "open", closesIn, allDay: closesIn >= 6 * 1440 };
+        }
+        for (let i = 0; i < 8; i++) {
+            const ranges = (hours[(now.wd + i) % 7] || []).slice().sort((a, b) => a[0] - b[0]);
+            for (const [s] of ranges) {
+                const delta = i * 1440 + s - now.mins;
+                if (delta > 0) return { state: "closed", opensIn: delta };
+            }
+        }
+        return { state: "closed" };
+    }
+
+    function callTimeHtml(lead) {
+        if (!lead.timezone) return "";
+        let local;
+        try { local = fmtIn(new Date(), lead.timezone, true); } catch (e) { return ""; }
+        const st = callStatus(lead);
+        let badge = "";
+        if (st.state === "open") {
+            const until = st.allDay ? "open 24 hours" : `closes in ${fmtGap(st.closesIn)}`;
+            badge = `<span style="color:var(--emerald);font-weight:600;">🟢 Open now · ${until}</span>`;
+        } else if (st.state === "closed" && st.opensIn) {
+            const at = new Date(Date.now() + st.opensIn * 60000);
+            badge = `<span style="color:#f87171;">🔴 Closed · opens ${esc(fmtIn(at, lead.timezone, true))} = <b>${esc(fmtIn(at, null, true))} your time</b></span>`;
+        } else if (st.state === "closed") {
+            badge = `<span style="color:#f87171;">🔴 Closed</span>`;
+        } else if (st.state === "usual") {
+            badge = `<span style="color:#fbbf24;">🟡 Usually open now (hours not listed)</span>`;
+        } else {
+            badge = `<span style="color:var(--text-muted);">⚪ Probably closed now (hours not listed)</span>`;
+        }
+        return `<span class="contact-item" title="Business local time">🕐 ${esc(local)} local · ${badge}</span>`;
+    }
+
+    // Open-now first, then usual-hours, then closed (opening soonest first)
+    function callRank(lead) {
+        const st = callStatus(lead);
+        if (!st) return 3;
+        return { open: 0, usual: 1, "usual-closed": 2, closed: 2 }[st.state] ?? 3;
     }
 
     // States / provinces per country
@@ -123,16 +211,32 @@ document.addEventListener("DOMContentLoaded", () => {
         if (rgn !== "all") params.append("region", rgn);
         if (srv !== "all") params.append("service", srv);
         if (st !== "all") params.append("status", st);
+        // The open-now filter is computed here in the browser, so it needs the whole list, not the newest 300
+        const callFilter = filterOpen ? filterOpen.value : "all";
+        if (callFilter !== "all") params.append("limit", "5000");
 
         try {
             const res = await fetch(`/api/leads?${params.toString()}`);
             const data = await res.json();
             currentLeads = data.leads || [];
-            renderLeads(currentLeads);
+            renderLeads(applyCallFilter(currentLeads));
         } catch (err) {
             console.error("Error fetching leads:", err);
         }
     }
+
+    function applyCallFilter(leads) {
+        const mode = filterOpen ? filterOpen.value : "all";
+        if (mode === "all") return leads;
+        const allowed = mode === "open" ? [0] : [0, 1];
+        return leads.filter(l => allowed.includes(callRank(l)))
+                    .sort((a, b) => callRank(a) - callRank(b));
+    }
+
+    // Local times and open/closed change by the minute - redraw the visible list every minute
+    setInterval(() => {
+        if (currentLeads.length && !document.hidden) renderLeads(applyCallFilter(currentLeads));
+    }, 60000);
 
     async function fetchStats() {
         try {
@@ -206,6 +310,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
                     <div class="lead-contact-strip">
                         <span class="contact-item"><i data-lucide="map-pin" style="width:14px;height:14px"></i> ${esc(l.location || 'Global')}</span>
+                        ${callTimeHtml(l)}
                         ${l.email ? `<a href="mailto:${esc(l.email)}" class="contact-item" style="color:inherit;text-decoration:none;"><i data-lucide="mail" style="width:14px;height:14px"></i> ${esc(l.email)}</a>` : ''}
                         ${l.phone ? `
                             <span class="contact-item" style="color:var(--cyan);font-weight:600;display:inline-flex;align-items:center;gap:4px;">
@@ -500,6 +605,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (filterRegion) filterRegion.addEventListener("change", fetchLeads);
     filterService.addEventListener("change", fetchLeads);
     filterStatus.addEventListener("change", fetchLeads);
+    if (filterOpen) filterOpen.addEventListener("change", fetchLeads);
 
     // Export CSV: default = only the new leads from the most recent scan (never re-export leads already worked)
     const exportCsvLabel = document.getElementById("exportCsvLabel");
