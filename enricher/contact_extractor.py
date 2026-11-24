@@ -23,6 +23,8 @@ PLACEHOLDER_LOCAL_PARTS = {
     "username", "test", "johndoe", "john.doe", "john", "jane", "janedoe", "jane.doe", "someone",
     "example", "abc", "xyz", "me", "mail", "address", "noreply", "no-reply", "donotreply",
 }
+VENDOR_EMAIL_DOMAIN = re.compile(r"marketing|digital|media|design|web|seo|agency|studio|hosting|domain|creative|"
+                                 r"solutions|tech|soft|font|theme|pixel|brand", re.I)
 FREE_MAIL = ("gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "icloud.com", "live.com",
              "aol.com", "proton.me", "protonmail.com")
 
@@ -166,6 +168,7 @@ async def extract_contacts_from_url(url: str, default_country: str = "US") -> Di
         return 2      # third-party domain (agency/vendor) - least trusted
 
     email_candidates = []
+    mailto_emails = set()
 
     parsed = urlparse(clean_url)
     root = f"{parsed.scheme}://{parsed.netloc}"
@@ -202,6 +205,7 @@ async def extract_contacts_from_url(url: str, default_country: str = "US") -> Di
                 e = tag.get("href", "").replace("mailto:", "").split("?")[0].strip()
                 if is_valid_email(e):
                     email_candidates.append(e)
+                    mailto_emails.add(e)
             for e in re.findall(EMAIL_REGEX, html):
                 if is_valid_email(e):
                     email_candidates.append(e)
@@ -258,6 +262,10 @@ async def extract_contacts_from_url(url: str, default_country: str = "US") -> Di
                 elif ("twitter.com/" in href_l or "x.com/" in href_l) and not any(x in href_l for x in ["/intent/", "/share"]) and "twitter" not in contacts["social_links"]:
                     contacts["social_links"]["twitter"] = href
 
+    # A third-party address is usually someone else's: a font licence in the CSS, the web agency's credit
+    # in the footer. Keep it only when the page offers it as a clickable contact and it isn't a vendor.
+    email_candidates = [e for e in email_candidates
+                        if email_rank(e) < 2 or (e in mailto_emails and not VENDOR_EMAIL_DOMAIN.search(e.split("@")[-1]))]
     if email_candidates:
         # Own domain first, then free mail, then third-party; page order kept within a rank
         contacts["email"] = sorted(dict.fromkeys(email_candidates), key=email_rank)[0]

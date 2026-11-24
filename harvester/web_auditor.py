@@ -78,6 +78,10 @@ async def domain_exists(host: str) -> Optional[bool]:
 
 # Status codes that usually mean "our scraper was blocked or rate-limited", not "the site is broken"
 _BLOCKED_STATUSES = {401, 403, 405, 406, 429, 503}
+_CHALLENGE_MARKERS = ("sgcaptcha", "cf-chl", "just a moment...", "challenge-platform", "captcha-delivery",
+                      "checking your browser", "ddos protection by", "_incapsula_resource")
+_PARKED_MARKERS = ("domain is for sale", "domain may be for sale", "buy this domain", "domaincapital.com",
+                   "hugedomains.com", "sedoparking", "dan.com/buy", "parkingcrew", "bodis.com", "afternic.com")
 
 FREE_BUILDER_HOSTS = ("ueniweb.com", "wixsite.com", "business.site", "weebly.com", "godaddysites.com",
                       "square.site", "carrd.co", "blogspot.com", "wordpress.com", "webnode.", "site123.me",
@@ -143,6 +147,15 @@ async def audit_website(url: str) -> Dict[str, Any]:
 
         html = res.text
         html_lower = html.lower()
+        # Firewalls (SiteGround sgcaptcha, Cloudflare "Just a moment") answer bots with a tiny challenge page -
+        # auditing that page would invent problems ("no viewport") the real site doesn't have
+        if res.status_code == 202 or any(m in html_lower for m in _CHALLENGE_MARKERS):
+            return _inconclusive("site showed a bot-challenge page instead of the real website", cms)
+        # A "domain for sale" page means the listed address isn't really this business's website
+        if any(m in html_lower for m in _PARKED_MARKERS):
+            result = _inconclusive("listed website is a parked / for-sale domain", cms)
+            result["parked"] = True
+            return result
         soup = BeautifulSoup(html, "html.parser")
 
         final_host = httpx.URL(str(res.url)).host.lower()

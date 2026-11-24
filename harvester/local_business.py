@@ -62,7 +62,10 @@ ALL_POOL = ["Dental clinic", "Beauty & aesthetics", "Medical clinic", "Real esta
 COUNTRY_TLDS = {"US": [".com"], "UK": [".co.uk", ".com"], "CA": [".ca", ".com"], "UAE": [".ae", ".com"], "QA": [".qa", ".com"]}
 SOCIAL_HOSTS = ("facebook.com", "fb.com", "instagram.com", "linktr.ee", "tiktok.com", "twitter.com", "x.com",
                 # Google Business profile / maps short links - a listing, not the business's own website
-                "share.google", "g.page", "goo.gl", "maps.app.goo.gl", "google.com")
+                "share.google", "g.page", "goo.gl", "maps.app.goo.gl", "google.com",
+                # business directories - a profile about the business, not its own website
+                "bizapedia.com", "yelp.com", "yellowpages.com", "yellowpages.ca", "yell.com", "manta.com",
+                "bbb.org", "opencorporates.com", "mapquest.com", "foursquare.com", "tripadvisor.com", "nextdoor.com")
 # A listing that links to a sub-page like /locations/... belongs to a multi-branch company (chain)
 CHAIN_PATH = re.compile(r"/(locations?|stores?|branches|clinics|offices|pages|find-a-|salons?|studios?|team|agents?|our-people|doctors?)\b", re.I)
 # Franchises, hotel brands, public bodies and non-businesses are real but don't hire freelancers for a website
@@ -70,7 +73,10 @@ CHAIN_NAME = re.compile(
     r"\bfranchis|\bhospitals?\b|\buniversity\b|\bministry\b|\bgovernment\b|\bembassy\b|\bmunicipality\b|\bcouncil\b"
     r"|\b(westin|marriott|sheraton|hilton|hyatt|radisson|rotana|m[eé]ridien|novotel|ibis|holiday inn|best western|"
     r"ramada|crowne plaza|intercontinental|four seasons|ritz|courtyard|hampton inn|premier inn|travelodge)\b"
-    r"|wastewater|treatment plant|\bcondominium|\bholdings\b|highway operations|\b\d{2,4}\s*(am|fm)\b|\bradio\b",
+    r"|wastewater|treatment plant|\bcondominium|\bholdings\b|highway operations|\b\d{2,4}\s*(am|fm)\b|\bradio\b"
+    # real estate / service franchises - the brand runs the website, not the local office
+    r"|engel\s*&?\s*v[oö]lkers|keller williams|re/?max\b|century 21|coldwell banker|sotheby|\bexp realty|windermere"
+    r"|berkshire hathaway|compass real|jiffy lube|midas\b|meineke|great clips|supercuts|sport clips|h&r block",
     re.I)
 
 OVERPASS_ENDPOINTS = [
@@ -326,6 +332,10 @@ async def _find_variant_domain(name: str, town: str, category: str, tlds: List[s
 
 def _norm_site(url: str) -> str:
     url = (url or "").strip()
+    # Listings sometimes carry a doubled or upper-case scheme ("https://HTTP://WWW.EXAMPLE.COM")
+    schemes = re.match(r"^(?:(https?):/*)+", url, flags=re.I)
+    if schemes:
+        url = f"{schemes.group(1).lower()}://{url[schemes.end():]}"
     if not url:
         return ""
     if not url.startswith("http"):
@@ -389,7 +399,7 @@ async def _build_lead(biz: Dict[str, Any], country: str, region: str, city: str,
             website = f"{parsed_site.scheme}://{parsed_site.netloc}/"
             audit = await audit_website(website)
         if isinstance(audit, Exception) or not audit.get("needs_work"):
-            return None  # site is fine (or could not be checked) -> no evidence they need us
+            return None  # site is fine, could not be checked, or is a parked domain -> no evidence they need us
         if not isinstance(contacts, Exception):
             email = email or contacts.get("email", "")
             whatsapp = whatsapp or contacts.get("whatsapp", "")
