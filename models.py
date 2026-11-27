@@ -27,6 +27,8 @@ class Lead(BaseModel):
     audit_summary: Optional[str] = ""
     ai_pitch: Optional[str] = ""
     status: str = "new" # 'new', 'contacted', 'replied', 'closed'
+    serial: Optional[str] = "" # USPTO trademark serial number (trademark leads only)
+    organized_in: Optional[str] = "" # USPTO "State or Country Where Organized" / "Citizenship" (trademark leads only)
     scan_id: Optional[str] = "" # which scan found this lead - lets the CSV export just one scan's new leads
     created_at: Optional[str] = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
 
@@ -38,6 +40,11 @@ class ScanRequest(BaseModel):
     region: Optional[str] = "all"
     limit: int = Field(default=40, ge=1, le=200)
     gemini_api_key: Optional[str] = ""
+
+class TrademarkScanRequest(BaseModel):
+    limit: int = Field(default=100, ge=1, le=1000)
+    countries: List[str] = ["US"]  # empty list = any country
+    max_age_days: int = Field(default=30, ge=0, le=365)  # 0 = filed today (USPTO date, US Eastern)
 
 class StatusUpdate(BaseModel):
     status: Literal["new", "contacted", "replied", "closed"]

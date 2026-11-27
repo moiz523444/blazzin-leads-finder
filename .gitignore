@@ -6,6 +6,7 @@ __pycache__/
 .env
 leads.db
 leads.db-journal
+leads.backup-*.db
 .pytest_cache/
 scratch_*.py
 *.log

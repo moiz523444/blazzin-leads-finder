@@ -25,5 +25,8 @@ _load_env_file()
 TOMTOM_API_KEY = os.environ.get("TOMTOM_API_KEY", "")
 # Free: Google Cloud console -> enable "PageSpeed Insights API" -> create API key (25,000/day)
 PAGESPEED_API_KEY = os.environ.get("PAGESPEED_API_KEY", "")
+# Free: https://account.uspto.gov/api-manager/ - official TSDR API, 60 lookups/minute. Without it trademark
+# scans read the public status page at 30 lookups/minute.
+USPTO_API_KEY = os.environ.get("USPTO_API_KEY", "")
 # Leads are kept on disk so contacted status and de-duplication survive restarts
 DB_PATH = os.environ.get("LEADS_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "leads.db"))

@@ -8,9 +8,10 @@ from fastapi.templating import Jinja2Templates
 from typing import Optional
 
 import config
-from models import ScanRequest, StatusUpdate
+from models import ScanRequest, StatusUpdate, TrademarkScanRequest
 import database as db
 import scan_jobs
+import trademark_jobs
 from harvester.regions import list_regions, COUNTRY_NAMES
 
 app = FastAPI(title="Omni-Lead AI Engine", description="Autonomous High-Intent Lead Intelligence Platform for Software Agencies")
@@ -93,11 +94,40 @@ async def stop_scan():
         job.log("Stop requested - finishing the leads being checked right now...", "warn")
     return {"success": True}
 
+@app.post("/api/trademark/start")
+async def start_trademark_scan(req: TrademarkScanRequest):
+    """Background USPTO scan: new trademark applications filed without an attorney."""
+    running = trademark_jobs.current_job()
+    if running and running.state == "running":
+        return {"success": False, "message": "A trademark scan is already running.", **running.status()}
+    job = trademark_jobs.start_job(req.limit, [c.upper() for c in req.countries], req.max_age_days)
+    return {"success": True, **job.status()}
+
+@app.get("/api/trademark/status")
+async def trademark_status(since: int = 0):
+    job = trademark_jobs.current_job()
+    return job.status(since) if job else {"state": "idle"}
+
+@app.post("/api/trademark/stop")
+async def stop_trademark_scan():
+    job = trademark_jobs.current_job()
+    if job and job.state == "running":
+        job.stop_requested = True
+        job.log("Stop requested - finishing the record being read...", "warn")
+    return {"success": True}
+
 @app.get("/api/export")
 async def export_csv(scope: str = "last"):
-    """scope=last (default): only the new leads from the most recent scan. scope=all: every saved lead."""
+    """scope=last (default): only the new leads from the most recent scan. scope=all: every saved lead.
+    scope=trademark / trademark_all: trademark leads (last trademark scan / all) in the short USPTO layout."""
     if scope == "all":
         csv_data, filename = db.export_leads_csv(), "all_leads.csv"
+    elif scope == "trademark_all":
+        csv_data, filename = db.export_trademark_csv(), "trademark_leads_all.csv"
+    elif scope == "trademark":
+        last = db.get_latest_trademark_scan_id()
+        csv_data = db.export_trademark_csv(scan_id=last or "__none__")
+        filename = f"trademark_leads_{last or 'none'}.csv"
     else:
         last = db.get_latest_scan_id()
         csv_data = db.export_leads_csv(scan_id=last or "__none__")

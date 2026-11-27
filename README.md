@@ -40,6 +40,7 @@ Open http://127.0.0.1:8000
 |---|---|---|
 | `TOMTOM_API_KEY` | https://developer.tomtom.com - sign up, Dashboard -> Keys | 2,500 Search requests/month, no card |
 | `PAGESPEED_API_KEY` | Google Cloud console -> enable "PageSpeed Insights API" -> Credentials -> API key | 25,000/day |
+| `USPTO_API_KEY` | https://account.uspto.gov/api-manager/ | 60 trademark lookups/minute (30/minute without a key) |
 
 A scan uses about 2 TomTom requests per city searched (roughly 10-20 per scan).
 
@@ -49,6 +50,20 @@ A scan runs in the background ([scan_jobs.py](scan_jobs.py)) until the **target 
 reached: each round searches ~10 new cities, every verified lead is saved immediately, and the dashboard shows
 `found / target`, an estimated time remaining (from the live rate) and a Stop button. Safety limits: 25 minutes,
 12 rounds, or 3 rounds in a row with nothing new (the niche/area is used up).
+
+## Trademark leads (USPTO)
+
+The **📜 Fetch Trademark Leads** button ([trademark_jobs.py](trademark_jobs.py), [harvester/trademark.py](harvester/trademark.py))
+reads brand-new USPTO trademark applications, newest first, and keeps the ones filed **without an attorney**
+("Attorney of Record - None"). Each lead carries the owner's name, address, the phone and e-mail from the public
+record, the mark, the goods/services and a link to the USPTO case. Leads are saved with source `trademark`, so
+the dashboard filter, CSV export and call-time features work as for map leads. The map scan is untouched.
+
+- Speed: 30 records/minute without a key (faster gets HTTP 403), 60/minute with `USPTO_API_KEY`.
+- About 1 in 10 new applications is a US pro-se filing, so 100 leads take roughly 1,000 records (~35 min without a key).
+- Serial numbers already read are stored in the `tm_checked` table and never fetched twice.
+- Outreach: the records are public, but say you are not affiliated with the USPTO, honour opt-out requests
+  (CAN-SPAM) and don't auto-dial or text mobile numbers without consent (TCPA).
 
 ## Best time to call
 

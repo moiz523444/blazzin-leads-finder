@@ -259,6 +259,52 @@
                     </button>
                 </form>
 
+                <!-- USPTO trademark leads: separate scan, separate button -->
+                <div id="trademarkBox" class="control-form" style="margin-top:18px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.08);">
+                    <label class="section-label">📜 Trademark Leads (USPTO - no attorney)</label>
+                    <small class="text-muted" style="display:block; margin:-4px 0 10px;">
+                        New trademark applications filed by the owner themselves - public record with their own name, phone & e-mail.
+                    </small>
+                    <div class="form-group">
+                        <select id="tmCountryInput" class="form-select">
+                            <option value="US" selected>🇺🇸 United States owners</option>
+                            <option value="US,UK,CA,UAE,QA">🌐 All 5 countries (US, UK, CA, UAE, QA)</option>
+                            <option value="">🌍 Any country</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <select id="tmAgeInput" class="form-select">
+                            <option value="0">🆕 Filed today (fresh - USPTO date)</option>
+                            <option value="7">Filed in the last 7 days</option>
+                            <option value="30" selected>Filed in the last 30 days</option>
+                            <option value="90">Filed in the last 90 days</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <div class="slider-header">
+                            <label class="section-label">Target New Trademark Leads</label>
+                            <span id="tmVolumeValue" class="badge-value">100 Leads</span>
+                        </div>
+                        <input type="range" id="tmVolumeSlider" min="10" max="500" step="10" value="100" class="range-slider">
+                        <div class="slider-ticks"><span>10</span><span>100</span><span>250</span><span>500</span></div>
+                    </div>
+                    <button type="button" id="tmStartBtn" class="btn btn-secondary btn-block">
+                        <i data-lucide="stamp"></i>
+                        <span>Fetch Trademark Leads</span>
+                    </button>
+                    <div id="tmStatus" class="text-muted" style="font-size:12px; margin-top:6px; font-family:monospace;"></div>
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button type="button" id="tmExportBtn" class="btn btn-secondary" style="flex:1;" title="Trademark leads from your most recent trademark scan">
+                            <i data-lucide="download"></i>
+                            <span>Trademark CSV (last scan)</span>
+                        </button>
+                        <button type="button" id="tmExportAllBtn" class="btn btn-danger-ghost" title="Every saved trademark lead">
+                            <i data-lucide="files"></i>
+                            <span>All</span>
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Live Status Terminal -->
                 <div id="liveTerminal" class="terminal-box">
                     <div class="terminal-header">
@@ -291,6 +337,7 @@
                         <select id="filterSource" class="filter-select">
                             <option value="all">All Channels</option>
                             <option value="local_verified">Verified Local Businesses ✅</option>
+                            <option value="trademark">Trademark Filers (USPTO, no attorney) 📜</option>
                             <option value="social_media">Social & Founders (LinkedIn/IG/FB/X/Reddit) 🌐</option>
                             <option value="new_business">Zero-Website (Hot Leads 🔥)</option>
                             <option value="meta_ads">Website Tech Revamp ⚡</option>
@@ -393,7 +440,7 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=4.3"></script>
+    <script src="/static/js/app.js?v=4.6"></script>
 </body>
 
 </html>

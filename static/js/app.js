@@ -277,6 +277,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const sourceLabels = {
                 local_verified: "Verified Local ✅",
+                trademark: "Trademark Filer 📜",
                 social_media: "Social & Founders 🌐",
                 meta_ads: "Website Tech Revamp ⚡",
                 ecom_funnel: "E-Commerce Revamp 🛍️",
@@ -300,6 +301,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <span class="source-tag tag-${sourceTag}">${esc(sourceLabels[l.source] || l.source)}</span>
                         <h4 class="lead-title">${esc(l.business_name)}</h4>
                         ${l.category ? `<span class="contact-item" style="font-size:0.8rem;opacity:0.8;">${esc(l.category)}</span>` : ''}
+                        ${l.serial ? `<a href="https://tsdr.uspto.gov/#caseNumber=${encodeURIComponent(l.serial)}&caseType=SERIAL_NO&searchType=statusSearch" target="_blank" rel="noopener noreferrer" class="contact-item" style="font-size:0.8rem;color:var(--cyan);text-decoration:none;" title="Open the USPTO record">📜 Serial ${esc(l.serial)}</a>` : ''}
                         ${webHtml}
                         <span class="status-badge status-${statusTag}">${esc(l.status)}</span>
                     </div>
@@ -636,6 +638,112 @@ document.addEventListener("DOMContentLoaded", () => {
             addLog("Database cleared by user.", "warn");
         }
     });
+
+    // ---- Trademark leads (USPTO): its own background job, logs go to the same console ----
+    const tmStartBtn = document.getElementById("tmStartBtn");
+    const tmVolumeSlider = document.getElementById("tmVolumeSlider");
+    const tmVolumeValue = document.getElementById("tmVolumeValue");
+    const tmStatus = document.getElementById("tmStatus");
+    const tmExportBtn = document.getElementById("tmExportBtn");
+    const tmExportAllBtn = document.getElementById("tmExportAllBtn");
+    if (tmExportBtn) tmExportBtn.addEventListener("click", () => { window.location.href = "/api/export?scope=trademark"; });
+    if (tmExportAllBtn) tmExportAllBtn.addEventListener("click", () => { window.location.href = "/api/export?scope=trademark_all"; });
+    let tmRunning = false;
+    let tmPollTimer = null;
+    let tmLogSeq = 0;
+    let tmLastRefreshAt = 0;
+
+    if (tmVolumeSlider) tmVolumeSlider.addEventListener("input", (e) => {
+        tmVolumeValue.textContent = `${e.target.value} Leads`;
+    });
+
+    function setTmUi(running) {
+        tmRunning = running;
+        tmStartBtn.disabled = false;
+        tmStartBtn.innerHTML = running
+            ? `<i data-lucide="square"></i> <span>Stop Trademark Scan (leads found are kept)</span>`
+            : `<i data-lucide="stamp"></i> <span>Fetch Trademark Leads</span>`;
+        lucide.createIcons();
+    }
+
+    async function pollTrademark() {
+        try {
+            const s = await (await fetch(`/api/trademark/status?since=${tmLogSeq}`)).json();
+            if (s.state === "idle") {
+                clearInterval(tmPollTimer);
+                tmPollTimer = null;
+                setTmUi(false);
+                return;
+            }
+            (s.log || []).forEach(entry => {
+                addLog(entry.text, entry.kind);
+                tmLogSeq = Math.max(tmLogSeq, entry.seq);
+            });
+            tmStatus.textContent = s.state === "running"
+                ? `${s.found}/${s.target} leads · ${s.looked_up} records read · ~${fmtDuration(s.eta_seconds)} left`
+                : `${s.found}/${s.target} leads · ${s.looked_up} records · finished in ${fmtDuration(s.elapsed)}`;
+            if (s.found - tmLastRefreshAt >= 5 || s.state !== "running") {
+                tmLastRefreshAt = s.found;
+                fetchLeads();
+                fetchStats();
+            }
+            if (s.state !== "running") {
+                clearInterval(tmPollTimer);
+                tmPollTimer = null;
+                setTmUi(false);
+                refreshExportLabel();
+            }
+        } catch (err) {
+            console.error("Trademark status error:", err);
+        }
+    }
+
+    function startTmPolling() {
+        if (!tmPollTimer) tmPollTimer = setInterval(pollTrademark, 2000);
+        pollTrademark();
+    }
+
+    if (tmStartBtn) tmStartBtn.addEventListener("click", async () => {
+        tmStartBtn.disabled = true;
+        if (tmRunning) {
+            await fetch("/api/trademark/stop", { method: "POST" });
+            return;
+        }
+        const countries = document.getElementById("tmCountryInput").value.split(",").filter(Boolean);
+        try {
+            const res = await fetch("/api/trademark/start", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    limit: parseInt(tmVolumeSlider.value),
+                    countries,
+                    max_age_days: parseInt(document.getElementById("tmAgeInput").value)
+                })
+            });
+            const data = await res.json();
+            if (!data.success) addLog(data.message || "Could not start the trademark scan.", "warn");
+            tmLogSeq = 0;
+            tmLastRefreshAt = 0;
+            setTmUi(true);
+            startTmPolling();
+        } catch (err) {
+            addLog(`Notice: ${err.message}`, "warn");
+            setTmUi(false);
+        }
+    });
+
+    // Reopened the page while a trademark scan runs? Re-attach to it.
+    (async () => {
+        try {
+            const s = await (await fetch("/api/trademark/status")).json();
+            if (s.state === "running") {
+                setTmUi(true);
+                startTmPolling();
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    })();
 
     // Initial Fetch
     refreshExportLabel();

@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import re
 import csv
 import io
 import threading
@@ -15,7 +16,8 @@ _conn.row_factory = sqlite3.Row
 
 # Columns added after the first release - created on old databases by init_db()
 _NEW_COLUMNS = {"country": "TEXT DEFAULT ''", "region": "TEXT DEFAULT ''", "category": "TEXT DEFAULT ''",
-                "scan_id": "TEXT DEFAULT ''", "timezone": "TEXT DEFAULT ''", "hours": "TEXT DEFAULT ''"}
+                "scan_id": "TEXT DEFAULT ''", "timezone": "TEXT DEFAULT ''", "hours": "TEXT DEFAULT ''",
+                "serial": "TEXT DEFAULT ''", "organized_in": "TEXT DEFAULT ''"}
 
 
 def init_db():
@@ -48,20 +50,29 @@ def init_db():
         """)
         # One row per scan (even scans that found 0 new leads), so "last scan" never falls back to an older batch
         cursor.execute("CREATE TABLE IF NOT EXISTS scans (scan_id TEXT PRIMARY KEY, lead_count INTEGER, created_at TEXT)")
+        # USPTO serial numbers already looked at by trademark scans, so no case is fetched twice
+        cursor.execute("CREATE TABLE IF NOT EXISTS tm_checked (serial INTEGER PRIMARY KEY, outcome TEXT, checked_at TEXT)")
         existing = {row["name"] for row in cursor.execute("PRAGMA table_info(leads)")}
         for col, ddl in _NEW_COLUMNS.items():
             if col not in existing:
                 cursor.execute(f"ALTER TABLE leads ADD COLUMN {col} {ddl}")
+        # Trademark leads saved before the serial column existed: take it from "USPTO serial 12345678" in the summary
+        for row in cursor.execute("SELECT id, audit_summary FROM leads WHERE source = 'trademark' AND serial = ''").fetchall():
+            m = re.search(r"USPTO serial (\d+)", row["audit_summary"] or "")
+            if m:
+                cursor.execute("UPDATE leads SET serial = ? WHERE id = ?", (m.group(1), row["id"]))
         _conn.commit()
 
 
 def get_existing_signatures() -> set:
-    """Returns set of all existing phone numbers, websites, and business names to prevent duplicates across scans."""
+    """Returns set of all existing phone numbers, websites, business names and e-mails to prevent duplicates across scans."""
     with _lock:
         cursor = _conn.cursor()
-        cursor.execute("SELECT business_name, phone, website FROM leads")
+        cursor.execute("SELECT business_name, phone, website, email FROM leads")
         sigs = set()
         for r in cursor.fetchall():
+            if r["email"]:
+                sigs.add(r["email"].strip().lower())
             if r["phone"]:
                 sigs.add(r["phone"].strip())
             if r["website"]:
@@ -81,8 +92,8 @@ def save_lead(lead: Lead) -> Optional[int]:
                 business_name, source, service_needed, category, website, has_website,
                 location, country, region, email, phone, whatsapp, contact_name, social_links,
                 pain_points, intent_level, budget_estimate, audit_score,
-                audit_summary, ai_pitch, status, created_at, scan_id, timezone, hours
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                audit_summary, ai_pitch, status, created_at, scan_id, timezone, hours, serial, organized_in
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 lead.business_name,
                 lead.source,
@@ -108,7 +119,9 @@ def save_lead(lead: Lead) -> Optional[int]:
                 lead.created_at,
                 lead.scan_id or "",
                 lead.timezone or "",
-                json.dumps(lead.hours) if lead.hours else ""
+                json.dumps(lead.hours) if lead.hours else "",
+                lead.serial or "",
+                lead.organized_in or ""
             ))
             _conn.commit()
             if cursor.rowcount == 0:
@@ -130,10 +143,40 @@ def record_scan(scan_id: str, lead_count: int):
         _conn.commit()
 
 
+def tm_checked_serials(low: int, high: int) -> set:
+    with _lock:
+        return {r[0] for r in _conn.execute("SELECT serial FROM tm_checked WHERE serial BETWEEN ? AND ?", (low, high))}
+
+
+def tm_mark_checked(serial: int, outcome: str):
+    with _lock:
+        _conn.execute("INSERT OR REPLACE INTO tm_checked (serial, outcome, checked_at) VALUES (?, ?, datetime('now'))",
+                      (serial, outcome))
+        _conn.commit()
+
+
+def tm_highest_checked() -> int:
+    with _lock:
+        row = _conn.execute("SELECT MAX(serial) FROM tm_checked WHERE outcome != 'missing'").fetchone()
+        return row[0] or 0
+
+
 def get_latest_scan_id() -> str:
     with _lock:
         row = _conn.execute("SELECT MAX(scan_id) FROM scans").fetchone()
         return row[0] or ""
+
+
+def get_latest_trademark_scan_id() -> str:
+    with _lock:
+        row = _conn.execute("SELECT MAX(scan_id) FROM leads WHERE source = 'trademark'").fetchone()
+        return row[0] or ""
+
+
+def set_organized_in(serial: str, place: str):
+    with _lock:
+        _conn.execute("UPDATE leads SET organized_in = ? WHERE serial = ?", (place, serial))
+        _conn.commit()
 
 
 def get_leads(source: Optional[str] = None, country: Optional[str] = None, service: Optional[str] = None,
@@ -301,7 +344,7 @@ def export_leads_csv(scan_id: Optional[str] = None) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "ID", "Business Name", "Category", "Source", "Service Needed", "Website", "Has Website",
+        "ID", "Business Name", "USPTO Serial No.", "USPTO Record Link", "Category", "Source", "Service Needed", "Website", "Has Website",
         "Location", "Country", "Region", "Timezone", "Opening Hours (business local time)",
         "Opening Hours (YOUR time - call window)",
         "Email", "Phone", "WhatsApp", "Pain Points", "Intent Level",
@@ -311,6 +354,9 @@ def export_leads_csv(scan_id: Optional[str] = None) -> str:
         writer.writerow([
             l.get("id"),
             l.get("business_name"),
+            l.get("serial") or "",
+            (f"https://tsdr.uspto.gov/#caseNumber={l['serial']}&caseType=SERIAL_NO&searchType=statusSearch"
+             if l.get("serial") else ""),
             l.get("category"),
             l.get("source"),
             l.get("service_needed"),
@@ -333,6 +379,28 @@ def export_leads_csv(scan_id: Optional[str] = None) -> str:
             l.get("ai_pitch"),
             l.get("status"),
             l.get("created_at")
+        ])
+    return output.getvalue()
+
+
+def export_trademark_csv(scan_id: Optional[str] = None) -> str:
+    """Trademark leads only, in the short USPTO layout: brand (mark) + owner + contact details."""
+    leads = get_leads(source="trademark", limit=100000, scan_id=scan_id)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Serial number", "Business name", "Primary telephone number", "Website URL",
+                     "Place of organization/citizenship", "Owner name", "Email"])
+    for l in leads:
+        # The mark (brand name) is kept in the first pain point: 'Filed trademark "MARK" on <date> - ...'
+        m = re.match(r'Filed trademark "(.*)" on ', (l.get("pain_points") or [""])[0])
+        writer.writerow([
+            l.get("serial") or "",
+            (m.group(1) if m and m.group(1) else "") or l.get("business_name"),
+            l.get("phone"),
+            l.get("website"),
+            l.get("organized_in") or "",
+            l.get("business_name"),
+            l.get("email"),
         ])
     return output.getvalue()
 
